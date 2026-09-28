@@ -4,7 +4,7 @@ Served with every /v1/connectors entry so the GUI's pre-connect detail page
 (UX-DECISIONS §38) can show About / Access before any credentials exist. Plain
 statements of behavior, not marketing: every bullet must stay true to the
 connector's actual tools (tool_defs.py) and, for managed connectors, the scopes
-the OpenWorker Cloud app requests. Overclaiming here is a product bug.
+the GastroWorker Cloud app requests. Overclaiming here is a product bug.
 
 ABOUT is optional (the list blurb is the fallback subtitle); ACCESS is required
 for every available connector — tests/test_connectors.py enforces it.
@@ -31,7 +31,7 @@ ABOUT: dict[str, str] = {
     "websites — separate from your personal browser, with actions subject to "
     "approval.",
     "github": "Work with issues, pull requests, repository files, and CI "
-    "status. One click installs the OpenWorker GitHub App on the repositories "
+    "status. One click installs the GastroWorker GitHub App on the repositories "
     "you pick; mention the agent on an issue or PR and it answers from your "
     "desktop.",
     "outlook": "Search, summarize, and send Microsoft 365 mail, and run your "
@@ -45,8 +45,10 @@ ABOUT: dict[str, str] = {
     "see.",
     "attio": "Read your Attio CRM — objects, records, and lists — to prep "
     "meetings and answer pipeline questions, and log notes as you work.",
-    "google_drive": "Search, browse, and read files across your Drive. "
-    "Multiple accounts connect side by side.",
+    "google_drive": "Search, browse, and inspect files across your Drive, then rename "
+    "or move approved documents. Multiple accounts connect side by side.",
+    "google_sheets": "Read worksheet ranges and update restaurant workbooks. "
+    "Every update or append is approval-gated.",
     "monday": "Work with your monday.com boards — read items, summarize and "
     "aggregate board data, create items, and post updates. One-click sign-in "
     "runs entirely on this computer against monday.com's own agent service; agents "
@@ -164,8 +166,12 @@ ACCESS: dict[str, list[str]] = {
         "Creates and updates tasks, and comments, as you.",
     ],
     "google_drive": [
-        "Reads and searches your files — read-only.",
-        "Never edits or deletes anything in your Drive.",
+        "Reads, searches, and loads photographed documents into Vision.",
+        "Renames or moves a file only after approval; never deletes files.",
+    ],
+    "google_sheets": [
+        "Reads spreadsheet metadata and worksheet ranges.",
+        "Updates ranges and appends rows only after approval.",
     ],
     "canva": [
         "Browses your designs and exports them — read-only.",

@@ -393,7 +393,7 @@ export function Sidebar(props: Props) {
   // Display identity for the account row: the cloud profile only carries the email, so the
   // row shows the capitalized local part ("rohit@…" → "Rohit"); the menu header shows it all.
   // On the hosted dashboard the identity comes from the Auth0 sign-in gate instead — the
-  // gateway account concept ("OpenWorker Cloud" sign-in) does not exist there.
+  // gateway account concept ("GastroWorker Cloud" sign-in) does not exist there.
   const hostedActor = isCloudMode() ? (cloudMe()?.actor ?? "") : "";
   const accountEmail = hostedActor || (cloud?.signed_in ? cloud.account : "");
   const accountName = accountEmail
@@ -1069,7 +1069,7 @@ export function Sidebar(props: Props) {
             <Icon name="sidebar" size={16} />
           </button>
         )}
-        <div className="brand-wordmark text-body">OpenWorker<span className="beta-tag">beta</span></div>
+        <div className="brand-wordmark text-body">GastroWorker<span className="beta-tag">beta</span></div>
       </div>
 
       {props.settingsRail ? (
@@ -1268,14 +1268,19 @@ export function Sidebar(props: Props) {
                 role="menu"
               >
                 {cloud?.signed_in || hostedActor ? (
-                  /* Just the email — being signed in is implicit. On the hosted
+                  /* Just the email: being signed in is implicit. On the hosted
                      dashboard this is the Auth0 identity; the gateway sign-in
                      below makes no sense there (no sidecar to open a browser). */
                   <div
-                    className="px-3 py-1.5 mb-1 text-label text-faint truncate border-b border-line"
+                    className="px-3 py-1.5 mb-1 text-label text-faint flex items-center justify-between border-b border-line"
                     title={accountEmail}
                   >
-                    {accountEmail}
+                    <span className="truncate">{accountEmail}</span>
+                    {cloud?.local_mode && (
+                      <span className="ml-1 px-1.5 py-0.5 rounded bg-okSoft text-ok text-[10px] font-medium shrink-0">
+                        Local
+                      </span>
+                    )}
                   </div>
                 ) : (
                   <>

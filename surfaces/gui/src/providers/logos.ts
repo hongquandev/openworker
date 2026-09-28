@@ -32,6 +32,7 @@ export const PROVIDER_LOGOS: Record<string, string> = {
   // different billing (owner call 2026-08-21: no bare-letter monogram).
   "openai-codex": openai,
   gemini,
+  antigravity: gemini,
   ark: byteplus,
   "ark-agent-plan-cn": volcengine,
   meta,
@@ -54,6 +55,7 @@ export const PROVIDER_ORDER = [
   "anthropic",
   "openai",
   "gemini",
+  "antigravity",
   "ark",
   "ark-agent-plan-cn",
   "meta",

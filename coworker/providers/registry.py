@@ -137,6 +137,12 @@ def _build_codex(profile: dict[str, Any], secrets: Any) -> ProviderClient:
     return CodexProvider(secrets=secrets)
 
 
+def _build_antigravity(profile: dict[str, Any], secrets: Any) -> ProviderClient:
+    from .antigravity_provider import AntigravityProvider
+
+    return AntigravityProvider(secrets=secrets)
+
+
 def _build_anthropic(profile: dict[str, Any], secrets: Any) -> ProviderClient:
     # Key resolution stays in AnthropicProvider/resolve_api_key (explicit → env → SecretStore),
     # deferred to first call so the provider can be built before a key exists.
@@ -369,6 +375,17 @@ DESCRIPTORS: list[ProviderDescriptor] = [
         recommended_model="gpt-5.6-sol",
         blurb="Sign in with your ChatGPT plan and run OpenAI models through your "
         "subscription — no API key. Tokens stay on this machine.",
+        auth="oauth",
+    ),
+    ProviderDescriptor(
+        name="antigravity",
+        title="Google Antigravity",
+        needs_key=False,
+        fields=[],
+        build=_build_antigravity,
+        recommended_model="gemini-3.8-flash",
+        blurb="Sign in with your Google account and use the models included with your "
+        "Antigravity plan. Tokens stay on this computer.",
         auth="oauth",
     ),
     ProviderDescriptor(

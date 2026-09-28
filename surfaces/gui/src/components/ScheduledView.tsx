@@ -14,6 +14,7 @@ import {
 import { Icon } from "./Icon";
 import { PanelHead } from "./IntegrationsView";
 import { AutomationQuickstart } from "./AutomationQuickstart";
+import { PipelineDetailView } from "./PipelineDetailView";
 
 // Shared utility strings (the §28 page shell — mirrors IntegrationsView's constants).
 const CARD = "rounded-xl2 border border-line bg-panel";
@@ -90,6 +91,8 @@ export function ScheduledView({ onOpenRun, onRunNow, initialOpenId }: Props) {
     title: string;
     instructions: string;
     cron?: string;
+    agent?: string;
+    model?: string;
     permissions?: { tool: string; target: string; access: "read" | "write" }[];
   }) => {
     setBusy(payload.title);
@@ -303,6 +306,7 @@ function TaskDetail({
   // The seen mark AS OF opening — the "new" pills compare against this frozen value
   // while mark-seen advances the stored one (badge clears; highlights survive).
   const [seenMark, setSeenMark] = useState<number | null>(null);
+  const [selectedPipelineSessionId, setSelectedPipelineSessionId] = useState<string | null>(null);
 
   const refresh = () =>
     getAutomation(id)
@@ -334,6 +338,23 @@ function TaskDetail({
         <div className="text-ui text-muted">{tt("automations.loading")}</div>
       </Shell>
     );
+
+  if (selectedPipelineSessionId && task) {
+    return (
+      <PipelineDetailView
+        sessionId={selectedPipelineSessionId}
+        workspace={task.workspace}
+        taskTitle={task.title}
+        onBack={() => setSelectedPipelineSessionId(null)}
+        onOpenChat={(sid) =>
+          onOpenRun(sid, task.workspace, task.agent, {
+            id: task.id,
+            title: task.title,
+          })
+        }
+      />
+    );
+  }
 
   const startEdit = () => {
     setTitle(task.title);
@@ -480,14 +501,11 @@ function TaskDetail({
           <div
             className="sched-run open"
             key={r.run_id}
-            onClick={() =>
-              r.session_id &&
-              onOpenRun(r.session_id, task.workspace, task.agent, {
-                id: task.id,
-                title: task.title,
-              })
-            }
-            title={tt("automations.open_run")}
+            onClick={() => {
+              if (!r.session_id) return;
+              setSelectedPipelineSessionId(r.session_id);
+            }}
+            title={tt("automations.open_pipeline", "Open pipeline details")}
           >
             <div className="sched-run-row">
               <span>

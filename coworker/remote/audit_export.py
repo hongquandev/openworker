@@ -143,7 +143,7 @@ def to_ocsf(
         "status": status,
         "metadata": {
             "version": _OCSF_VERSION,
-            "product": {"name": "OpenWorker", "vendor_name": "OpenWorker"},
+            "product": {"name": "GastroWorker", "vendor_name": "GastroWorker"},
             "uid": f"{machine_id}:{row.get('id')}",
         },
         "actor": {

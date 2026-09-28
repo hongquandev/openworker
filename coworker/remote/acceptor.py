@@ -288,7 +288,7 @@ def mount_acceptor(
         # Informational only, and deliberately constant: it must not confirm
         # whether a token is valid to an unauthenticated caller.
         return PlainTextResponse(
-            "This is an OpenWorker join URL. On the machine you want to add, run:\n"
+            "This is an GastroWorker join URL. On the machine you want to add, run:\n"
             "  openworker join <this URL> [--name=my-box]\n"
         )
 
@@ -355,7 +355,7 @@ def mount_acceptor(
             "verification_url": (
                 approval_url.format(code=user_code) if approval_url else ""
             ),
-            "verification_hint": "Approve in the OpenWorker app: Settings → Machines",
+            "verification_hint": "Approve in the GastroWorker app: Settings → Machines",
         }
 
     @app.post("/v1/remote/device/poll")

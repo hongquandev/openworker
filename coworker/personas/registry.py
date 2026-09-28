@@ -146,11 +146,11 @@ class PersonaRegistry:
         # default) leads. Chat is GONE (owner call 2026-08-21; retired-but-listed since
         # 2026-08-11) — stray `persona=chat` session ids resolve to the default via
         # agent()'s unknown-id fallback. Code ships disabled + unsurfaced (same owner
-        # call): OpenWorker is the launch generalist, but Code stays one checkbox away
+        # call): GastroWorker is the launch generalist, but Code stays one checkbox away
         # as the only plain work-in-my-repo persona.
         self._register_builder(
             "cowork",
-            "OpenWorker",
+            "GastroWorker",
             "cowork",
             "Produce a deliverable — research, analysis, scripts",
             cowork_agent,
@@ -548,6 +548,107 @@ class PersonaRegistry:
         )
         dest = clone_persona_repo(url, base, clone=clone or git_clone)
         return self.install_from_dir(dest)
+
+    def sync_workflows(
+        self,
+        source_url: Optional[str] = None,
+        *,
+        branch: str = "main",
+        skill_store: Optional[Any] = None,
+        clone=None,
+    ) -> dict[str, Any]:
+        """Synchronize Personas and Global Skills from a remote Git URL or directory."""
+        from ..config import load_config
+        from .loading import clone_persona_repo, git_clone, consent_summary
+
+        url = (source_url or "").strip() or getattr(load_config(), "workflow_sync_url", "").strip()
+        if not url:
+            return {"ok": False, "error": "No workflow sync source URL configured."}
+
+        local_path = Path(url).expanduser()
+        if local_path.is_dir():
+            dest = local_path
+        else:
+            base = (
+                (self.state_path.parent if self.state_path else Path.cwd())
+                / "workflow-sync-cache"
+            )
+            dest = clone_persona_repo(url, base, clone=clone or git_clone)
+
+        search_dirs = [dest]
+        if (dest / "personas").is_dir():
+            search_dirs.append(dest / "personas")
+
+        manifest_paths = []
+        for sdir in search_dirs:
+            for p in sorted(sdir.glob("*.md")):
+                if p.is_file() and p.name.lower() != "readme.md":
+                    manifest_paths.append(p)
+            for sub in sorted(p for p in sdir.iterdir() if p.is_dir()):
+                md = sub / "manifest.md"
+                if md.is_file():
+                    manifest_paths.append(md)
+
+        manifest_paths = list({p.resolve(): p for p in manifest_paths}.values())
+
+        added: list[dict[str, Any]] = []
+        updated: list[dict[str, Any]] = []
+        unchanged: list[dict[str, Any]] = []
+        consent_needed: list[dict[str, Any]] = []
+
+        for md in manifest_paths:
+            try:
+                m = load_manifest_file(md, builtin=False)
+            except Exception:
+                continue
+
+            existing = self._entries.get(m.id)
+            replaces = self._replaces_of(m)
+
+            if existing and existing.manifest and existing.manifest.version == m.version:
+                unchanged.append({"id": m.id, "name": m.name, "version": m.version})
+                continue
+
+            snapshot = self._snapshot(md, m.id)
+            installed = load_manifest_file(snapshot, builtin=False) if snapshot else m
+            self._register_manifest(installed, builtin=False)
+
+            if replaces is None or replaces.get("capabilities_grew"):
+                self._enabled[m.id] = False
+                self._surfaced[m.id] = False
+                summary = consent_summary(installed)
+                summary["replaces"] = replaces
+                consent_needed.append(summary)
+
+            self._installed_meta[m.id] = {
+                "version": installed.version,
+                "source": str(md),
+                "installed_at": self._now_stamp(),
+            }
+
+            info = {"id": m.id, "name": m.name, "version": m.version}
+            if replaces is None:
+                added.append(info)
+            else:
+                updated.append(info)
+
+        self.save()
+
+        synced_skills: list[str] = []
+        skills_dir = dest / "skills"
+        if skill_store and skills_dir.is_dir():
+            synced_skills = skill_store.sync_skills_from_dir(skills_dir)
+
+        return {
+            "ok": True,
+            "source": url,
+            "added": added,
+            "updated": updated,
+            "unchanged": unchanged,
+            "synced_skills": synced_skills,
+            "consent_needed": consent_needed,
+            "personas": self.list_all(),
+        }
 
 
 # -- module singleton (used by agents.get_agent / list_agents) ------------------

@@ -294,3 +294,81 @@ def test_account_profile_refreshes_in_place(secrets, monkeypatch):
     assert out["ok"]
     assert secrets.get("gmail:account:me@x.com")["access_token"] == "fresh"
     assert not (secrets.get("gmail:default") or {}).get("access_token")
+
+
+def test_custom_oauth_refreshes_directly(secrets, monkeypatch):
+    from coworker import cloud
+
+    gmail_accounts.managed_connect_account(
+        secrets,
+        {
+            "type": "oauth",
+            "enabled": True,
+            "custom_oauth": True,
+            "client_id": "cid-123",
+            "client_secret": "csec-456",
+            "access_token": "old-token",
+            "refresh_token": "refr-789",
+            "expires": time.time() - 10,
+            "account": "custom@domain.com",
+        },
+    )
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"access_token": "fresh-custom-token", "expires_in": 3600}
+
+    monkeypatch.setattr(cloud.httpx, "post", lambda *a, **k: _Resp())
+    cloud.ensure_fresh_connector_token(
+        secrets, None, "gmail", profile_key="gmail:account:custom@domain.com"
+    )
+    updated = secrets.get("gmail:account:custom@domain.com")
+    assert updated["access_token"] == "fresh-custom-token"
+
+
+def test_gmail_send_email_with_attachments(secrets, tmp_path, monkeypatch):
+    from coworker.roots import RootDir
+    import email
+    from email import policy
+    import base64
+
+    gmail_accounts.managed_connect_account(secrets, _account("me@example.com"))
+
+    pdf_file = tmp_path / "test_claim.pdf"
+    pdf_file.write_bytes(b"%PDF-1.4 mock pdf content")
+
+    sent_raw = None
+
+    def mock_request(method, url, headers=None, json=None):
+        nonlocal sent_raw
+        sent_raw = json.get("raw")
+        return {"ok": True, "id": "msg-123"}
+
+    monkeypatch.setattr("coworker.connectors.integration_tools._request", mock_request)
+
+    tools = make_integration_tools(secrets, roots=[RootDir(path=str(tmp_path), writable=False)])
+    send_fn = next(t for t in tools if t.__name__ == "gmail_send_email")
+
+    res = send_fn(
+        to="customer@example.com",
+        subject="Claim form",
+        body="Please find attached form.",
+        attachments=[str(pdf_file)],
+    )
+    assert res.get("ok") is True
+    assert sent_raw is not None
+
+    raw_bytes = base64.urlsafe_b64decode(sent_raw + "=" * (-len(sent_raw) % 4))
+    parsed = email.message_from_bytes(raw_bytes, policy=policy.default)
+    assert parsed["To"] == "customer@example.com"
+    assert parsed["Subject"] == "Claim form"
+
+    attachments = list(parsed.iter_attachments())
+    assert len(attachments) == 1
+    att = attachments[0]
+    assert att.get_filename() == "test_claim.pdf"
+    assert att.get_content_type() == "application/pdf"
+    assert att.get_content() == b"%PDF-1.4 mock pdf content"
+

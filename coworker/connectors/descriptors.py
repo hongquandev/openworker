@@ -77,7 +77,7 @@ class ConnectorDescriptor:
     # (connectors/experimental/) that release builds exclude entirely.
     experimental: bool = False
     risk_notice: str = ""
-    # One-click managed OAuth via OpenWorker Cloud (requires cloud sign-in).
+    # One-click managed OAuth via GastroWorker Cloud (requires cloud sign-in).
     # Manual token paste ALWAYS remains available — signed out or in — managed
     # is an extra path, never a replacement (local-only open-source flow is
     # sacred).
@@ -380,6 +380,15 @@ def _validate_google_drive(creds: dict) -> ValidationResult:
     )
 
 
+def _validate_google_sheets(creds: dict) -> ValidationResult:
+    return _validate_whoami(
+        "GET",
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {creds.get('access_token', '')}"},
+        identity=lambda d: d["email"],
+    )
+
+
 def _validate_docusign(creds: dict) -> ValidationResult:
     # userinfo also carries accounts[] (account_id + base_uri); the tool layer
     # re-fetches and caches those on first use, so validation only needs identity.
@@ -450,7 +459,7 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
         name="slack",
         title="Slack",
         icon="💬",
-        blurb="Two-way messaging — one-click via OpenWorker Cloud, or a manual Slack app (Socket Mode).",
+        blurb="Two-way messaging — one-click via GastroWorker Cloud, or a manual Slack app (Socket Mode).",
         auth="socket_app",
         two_way=True,
         channels=True,
@@ -550,19 +559,34 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
         logo="gmail",
         fields=[
             Field(
+                "client_id",
+                "Google Client ID",
+                required=False,
+                help="OAuth 2.0 Client ID from your Google Cloud Console.",
+                placeholder="...apps.googleusercontent.com",
+            ),
+            Field(
+                "client_secret",
+                "Google Client Secret",
+                secret=True,
+                required=False,
+                help="OAuth 2.0 Client Secret from your Google Cloud Console.",
+            ),
+            Field(
                 "access_token",
                 "OAuth access token",
                 secret=True,
-                help="Google OAuth token with Gmail scopes.",
+                required=False,
+                help="Google OAuth token with Gmail scopes (or connect via Custom Google OAuth).",
             ),
         ],
         instructions=[
-            "Use a Google OAuth access token with Gmail readonly and send scopes.",
-            "Paste the access token below.",
+            "1. Create an OAuth 2.0 Client ID (Web application) in Google Cloud Console.",
+            "2. Add Authorized Redirect URI: http://127.0.0.1:8765/v1/connectors/gmail/oauth/callback",
+            "3. Enter Client ID and Client Secret, then sign in with Google.",
         ],
         available=True,
         managed=True,
-        # Google OAuth verification (CASA) pending — one-click off until it clears.
         managed_paused=True,
     ),
     ConnectorDescriptor(
@@ -653,7 +677,7 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
             ),
         ],
         instructions=[
-            "One click connects via OpenWorker Cloud (recommended).",
+            "One click connects via GastroWorker Cloud (recommended).",
             "Manual: paste a Microsoft Graph access token with Mail and Calendar scopes.",
         ],
         validate=_validate_outlook,
@@ -1112,7 +1136,7 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
         name="google_drive",
         title="Google Drive",
         icon="◬",
-        blurb="Search, browse, and read files in Google Drive.",
+        blurb="Read photographed documents; rename or move them with approval.",
         auth="oauth",
         two_way=False,
         brand_color="#4285f4",
@@ -1122,11 +1146,12 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
                 "access_token",
                 "OAuth access token",
                 secret=True,
-                help="Google OAuth token with Drive read scopes.",
+                help="Google OAuth token with Drive read/write file scopes.",
             ),
         ],
         instructions=[
-            "Use a Google OAuth access token with Drive readonly scope.",
+            "Use a Google OAuth access token with Drive read/write file scopes.",
+            "Rename and move actions always require approval; deletion is unavailable.",
             "Paste the access token below.",
         ],
         validate=_validate_google_drive,
@@ -1136,6 +1161,33 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
         # Key each connected account by its Google email (the broker's `account`
         # field) so multiple Drive accounts list the same way Gmail's do, rather
         # than by the opaque `sub` that account_field="account_id" would use.
+        account_field="@identity",
+    ),
+    ConnectorDescriptor(
+        name="google_sheets",
+        title="Google Sheets",
+        icon="▦",
+        blurb="Read ranges and update restaurant workbooks with approval.",
+        auth="oauth",
+        two_way=False,
+        brand_color="#0f9d58",
+        logo="google_sheets",
+        fields=[
+            Field(
+                "access_token",
+                "OAuth access token",
+                secret=True,
+                help="Google OAuth token with Sheets read/write scopes.",
+            ),
+        ],
+        instructions=[
+            "Use a Google OAuth access token with Sheets read/write scopes.",
+            "Workbook updates and row appends always require approval.",
+        ],
+        validate=_validate_google_sheets,
+        available=True,
+        managed=True,
+        managed_paused=True,
         account_field="@identity",
     ),
     ConnectorDescriptor(
@@ -1256,7 +1308,7 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
             ),
         ],
         instructions=[
-            "One click connects via OpenWorker Cloud (recommended).",
+            "One click connects via GastroWorker Cloud (recommended).",
             "Manual: create an internal integration at notion.so/my-integrations,",
             "copy its secret, and share the relevant pages with the integration.",
         ],
@@ -1285,7 +1337,7 @@ DESCRIPTORS: list[ConnectorDescriptor] = [
             ),
         ],
         instructions=[
-            "One click connects via OpenWorker Cloud (recommended).",
+            "One click connects via GastroWorker Cloud (recommended).",
             "Manual: create an API key under Workspace Settings → Developers.",
         ],
         validate=_validate_attio,

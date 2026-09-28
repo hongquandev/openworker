@@ -1,6 +1,6 @@
-# Remote machines — run OpenWorker on another computer
+# Remote machines — run GastroWorker on another computer
 
-Run the OpenWorker agent on a VM, home server, or spare machine, and control it
+Run the GastroWorker agent on a VM, home server, or spare machine, and control it
 from the desktop app. Sessions live on the machine and **keep running while your
 laptop is closed** — you reconnect and pick up where things stand.
 
@@ -18,7 +18,7 @@ A few things are true by design, before any setup:
 
 ## What you need
 
-- The OpenWorker **desktop app** on your Mac or PC (this is the controller).
+- The GastroWorker **desktop app** on your Mac or PC (this is the controller).
 - A **Linux machine** (Ubuntu 22.04+ or similar, x64 or ARM) with Python 3.10+.
 - A network path from the machine **to** your desktop — see
   [Reachability](#reachability-how-the-machine-finds-your-desktop) below.
@@ -163,7 +163,7 @@ that isn't there.)
 - Conversation content lives on the machine; your desktop caches only what
   you've viewed, and only for offline reading.
 
-One more thing worth knowing: signing in to OpenWorker Cloud never changes
+One more thing worth knowing: signing in to GastroWorker Cloud never changes
 what's on this computer. Your conversations, keys, and enrolled machines
 belong to this computer's user account; sign-in only adds cloud machines
 and cloud features on top, and signing out hides only those.

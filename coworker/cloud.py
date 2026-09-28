@@ -1,4 +1,4 @@
-"""OpenWorker Cloud client: sign-in and managed one-click connectors.
+"""GastroWorker Cloud client: sign-in and managed one-click connectors.
 
 Everything here is OPTIONAL. The app is fully functional signed out — manual
 token paste stays available for every connector (and remains available after
@@ -212,12 +212,26 @@ def _store_cloud_tokens(secrets: SecretStore, token: dict) -> None:
     secrets.put(CLOUD_AUTH_PROFILE, profile)
 
 
-def status(secrets: SecretStore) -> dict[str, Any]:
+def status(secrets: SecretStore, config: Optional[Config] = None) -> dict[str, Any]:
     profile = secrets.get(CLOUD_AUTH_PROFILE) or {}
+    signed_in = bool(profile.get("access_token"))
+    account = profile.get("account") or ""
+    user_id = profile.get("user_id") or ""
+    if config is not None and getattr(config, "local_mode", False):
+        if not signed_in:
+            signed_in = True
+            account = profile.get("account") or getattr(config, "local_user_email", "local@localhost")
+            user_id = profile.get("user_id") or "usr_local_owner"
+        return {
+            "signed_in": signed_in,
+            "account": account,
+            "user_id": user_id,
+            "local_mode": True,
+        }
     return {
-        "signed_in": bool(profile.get("access_token")),
-        "account": profile.get("account") or "",
-        "user_id": profile.get("user_id") or "",
+        "signed_in": signed_in,
+        "account": account,
+        "user_id": user_id,
     }
 
 
@@ -309,6 +323,8 @@ def emit_session_created(
     import platform as _platform
     import sys
 
+    if getattr(config, "local_mode", False) and not (secrets.get(CLOUD_AUTH_PROFILE) or {}).get("access_token"):
+        return False  # local mode without explicit login: never send telemetry
     if not telemetry_enabled(secrets):
         return False
     token = fresh_access_token(secrets, config)
@@ -555,6 +571,78 @@ def refresh_managed_token(
     return profile
 
 
+def refresh_custom_google_token(
+    secrets: SecretStore, profile_key: str
+) -> Optional[dict[str, Any]]:
+    """Renew a custom Google OAuth token directly against Google's token endpoint,
+    without using the GastroWorker Cloud broker."""
+    profile = secrets.get(profile_key) or {}
+    client_id = profile.get("client_id")
+    client_secret = profile.get("client_secret")
+    refresh_token = profile.get("refresh_token")
+    if not (client_id and client_secret and refresh_token):
+        return None
+    try:
+        resp = httpx.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "refresh_token": refresh_token,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            profile["access_token"] = data["access_token"]
+            profile["expires"] = _now() + int(data.get("expires_in", 3600)) - 60
+            if data.get("refresh_token"):
+                profile["refresh_token"] = data["refresh_token"]
+            secrets.put(profile_key, profile)
+            return profile
+    except Exception:
+        pass
+    return None
+
+
+def refresh_custom_microsoft_token(
+    secrets: SecretStore, profile_key: str
+) -> Optional[dict[str, Any]]:
+    """Renew a custom Microsoft OAuth token directly against Microsoft's token endpoint."""
+    profile = secrets.get(profile_key) or {}
+    client_id = profile.get("client_id")
+    client_secret = profile.get("client_secret")
+    refresh_token = profile.get("refresh_token")
+    tenant = profile.get("tenant_id") or "common"
+    if not (client_id and refresh_token):
+        return None
+    try:
+        data = {
+            "client_id": client_id,
+            "refresh_token": refresh_token,
+            "grant_type": "refresh_token",
+        }
+        if client_secret:
+            data["client_secret"] = client_secret
+        resp = httpx.post(
+            f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token",
+            data=data,
+            timeout=15,
+        )
+        if resp.status_code == 200:
+            token_data = resp.json()
+            profile["access_token"] = token_data["access_token"]
+            profile["expires"] = _now() + int(token_data.get("expires_in", 3600)) - 60
+            if token_data.get("refresh_token"):
+                profile["refresh_token"] = token_data["refresh_token"]
+            secrets.put(profile_key, profile)
+            return profile
+    except Exception:
+        pass
+    return None
+
+
 def ensure_fresh_connector_token(
     secrets: SecretStore,
     config: Config,
@@ -564,9 +652,19 @@ def ensure_fresh_connector_token(
     leeway: int = 120,
 ) -> None:
     """Refresh-on-expiry hook for connector tools: if this is a managed profile
-    about to expire, renew it in place. No-op for manual profiles."""
+    or custom OAuth profile about to expire, renew it in place. No-op for manual profiles."""
     key = profile_key or f"{connector}:default"
     profile = secrets.get(key) or {}
+    if profile.get("custom_oauth"):
+        expires = float(profile.get("expires") or 0)
+        if expires and expires > _now() + leeway:
+            return
+        provider = profile.get("provider") or PROVIDER_FOR_CONNECTOR.get(connector)
+        if provider == "microsoft" or connector == "outlook":
+            refresh_custom_microsoft_token(secrets, key)
+        else:
+            refresh_custom_google_token(secrets, key)
+        return
     if not profile.get("managed"):
         return
     expires = float(profile.get("expires") or 0)
@@ -761,9 +859,160 @@ def slack_disconnect_workspace(
 # --- persona gallery -----------------------------------------------------------
 
 
+def _local_gallery_list() -> dict[str, Any]:
+    from pathlib import Path
+    from .personas.manifest import load_manifest_file
+
+    personas = []
+    builtin_dir = Path(__file__).parent / "personas" / "builtin"
+    manifests: list[tuple[Any, Path]] = []
+    if builtin_dir.is_dir():
+        for md in sorted(builtin_dir.glob("*.md")):
+            try:
+                manifests.append((load_manifest_file(md, builtin=True), md))
+            except Exception:
+                pass
+        for sub in sorted(p for p in builtin_dir.iterdir() if p.is_dir()):
+            md = sub / "manifest.md"
+            if md.is_file():
+                try:
+                    manifests.append((load_manifest_file(md, builtin=True), md))
+                except Exception:
+                    pass
+
+    try:
+        from .config import state_dir
+
+        user_personas_dir = state_dir() / "personas"
+        if user_personas_dir.is_dir():
+            for md in sorted(user_personas_dir.glob("*.md")):
+                try:
+                    manifests.append((load_manifest_file(md, builtin=False), md))
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    seen = set()
+    for m, path in manifests:
+        if m.id in seen:
+            continue
+        seen.add(m.id)
+        recs = [
+            r.ref
+            for r in getattr(m, "recommends", [])
+            if getattr(r, "kind", "") == "connector"
+        ]
+        personas.append(
+            {
+                "slug": m.id,
+                "name": m.name,
+                "tagline": m.tagline
+                or (
+                    m.description[:80] + "…"
+                    if len(m.description) > 80
+                    else m.description
+                ),
+                "description": m.description,
+                "version": getattr(m, "version", "1.0") or "1.0",
+                "family": getattr(m, "family", "general") or "general",
+                "workspace": (
+                    "folder" if getattr(m, "requires_folder", False) else "general"
+                ),
+                "publisher": "Built-in" if "builtin" in str(path) else "Local",
+                "recommended_connectors": recs,
+                "risk_summary": "low",
+                "featured": m.id in ("swe-worker", "devops-lead", "swe-lead", "cloud-posture"),
+            }
+        )
+    return {"ok": True, "personas": personas}
+
+
+def _local_gallery_manifest(slug: str) -> Optional[dict]:
+    import hashlib
+    from pathlib import Path
+
+    builtin_dir = Path(__file__).parent / "personas" / "builtin"
+    candidates = [
+        builtin_dir / f"{slug}.md",
+        builtin_dir / slug / "manifest.md",
+    ]
+    try:
+        from .config import state_dir
+
+        user_personas_dir = state_dir() / "personas"
+        candidates.append(user_personas_dir / f"{slug}.md")
+        candidates.append(user_personas_dir / slug / "manifest.md")
+    except Exception:
+        pass
+
+    for c in candidates:
+        if c.is_file():
+            try:
+                text = c.read_text(encoding="utf-8")
+                digest = "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+                return {
+                    "manifest_markdown": text,
+                    "manifest_hash": digest,
+                }
+            except Exception:
+                pass
+    return None
+
+
+def _local_gallery_detail(slug: str) -> Optional[dict]:
+    manifest_data = _local_gallery_manifest(slug)
+    if not manifest_data:
+        return None
+    from .personas.loading import consent_summary
+    from .personas.manifest import parse_manifest
+
+    try:
+        m = parse_manifest(manifest_data.get("manifest_markdown", ""), fallback_id=slug)
+        capabilities = consent_summary(m)
+        recommends = [
+            {"kind": r.kind, "ref": r.ref, "reason": r.reason, "tier": r.tier}
+            for r in m.recommends
+        ]
+        recs = [
+            r.ref
+            for r in getattr(m, "recommends", [])
+            if getattr(r, "kind", "") == "connector"
+        ]
+        card = {
+            "slug": m.id,
+            "name": m.name,
+            "tagline": m.tagline
+            or (
+                m.description[:80] + "…"
+                if len(m.description) > 80
+                else m.description
+            ),
+            "description": m.description,
+            "version": getattr(m, "version", "1.0") or "1.0",
+            "family": getattr(m, "family", "general") or "general",
+            "workspace": (
+                "folder" if getattr(m, "requires_folder", False) else "general"
+            ),
+            "publisher": "Built-in",
+            "recommended_connectors": recs,
+            "risk_summary": "low",
+            "featured": False,
+            "pitch_markdown": m.description or m.tagline or m.name,
+        }
+        return {
+            "ok": True,
+            "card": card,
+            "capabilities": capabilities,
+            "recommends": recommends,
+        }
+    except Exception as exc:
+        return {"ok": False, "error": f"manifest failed local validation: {exc}"}
+
+
 def _gallery_get(secrets: SecretStore, config: Config, path: str) -> Optional[dict]:
     token = fresh_access_token(secrets, config)
-    if not token:
+    if not token or token == "local_token":
         return None
     try:
         resp = httpx.get(
@@ -777,17 +1026,25 @@ def _gallery_get(secrets: SecretStore, config: Config, path: str) -> Optional[di
 
 
 def gallery_list(secrets: SecretStore, config: Config) -> Optional[dict]:
-    """Curated persona cards visible to this user's tenant; None when signed
-    out or the cloud is unreachable (gallery requires sign-in by design)."""
-    return _gallery_get(secrets, config, "/v1/personas/gallery")
+    """Curated persona cards visible to this user's tenant.
+    When local_mode is enabled or cloud is unreachable, falls back to local personas."""
+    res = _gallery_get(secrets, config, "/v1/personas/gallery")
+    if res is not None and res.get("personas"):
+        return res
+    return _local_gallery_list()
 
 
 def gallery_manifest(secrets: SecretStore, config: Config, slug: str) -> Optional[dict]:
-    return _gallery_get(secrets, config, f"/v1/personas/gallery/{slug}/manifest")
+    res = _gallery_get(secrets, config, f"/v1/personas/gallery/{slug}/manifest")
+    if res is not None:
+        return res
+    return _local_gallery_manifest(slug)
 
 
 def gallery_install_event(secrets: SecretStore, config: Config, slug: str) -> None:
     """Best-effort product telemetry (slug/version only, no content)."""
+    if getattr(config, "local_mode", False) and not (secrets.get(CLOUD_AUTH_PROFILE) or {}).get("access_token"):
+        return
     token = fresh_access_token(secrets, config)
     if not token:
         return
@@ -804,14 +1061,11 @@ def gallery_install_event(secrets: SecretStore, config: Config, slug: str) -> No
 
 
 def gallery_detail(secrets: SecretStore, config: Config, slug: str) -> Optional[dict]:
-    """Solo-page payload: the cloud card + publisher pitch, with capability
-    facts derived LOCALLY from the manifest via the desktop's own strict
-    parser — the pitch can never advertise what install-time consent wouldn't
-    show, because both views come from the same parsed manifest."""
+    """Solo-page payload: the card + capabilities derived from manifest."""
     card = _gallery_get(secrets, config, f"/v1/personas/gallery/{slug}")
     manifest = gallery_manifest(secrets, config, slug)
     if card is None or manifest is None:
-        return None
+        return _local_gallery_detail(slug)
     try:
         from .personas.loading import consent_summary
         from .personas.manifest import parse_manifest

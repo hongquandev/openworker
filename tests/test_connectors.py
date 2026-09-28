@@ -1197,6 +1197,92 @@ def test_drive_read_file_exports_google_docs(tmp_path, monkeypatch):
     assert "cannot read" in tools["drive_read_file"]("f2")["error"]
 
 
+def test_google_sheets_reads_and_approval_gated_writes(tmp_path, monkeypatch):
+    import coworker.connectors.integration_tools as it
+
+    secrets = SecretStore(tmp_path / "secrets.json")
+    secrets.put(
+        "google_sheets:default", {"access_token": "ya29.sheets", "enabled": True}
+    )
+    calls = []
+
+    def fake_request(method, url, *, headers=None, params=None, json=None, auth=None):
+        calls.append(
+            {"method": method, "url": url, "headers": headers, "params": params, "json": json}
+        )
+        return {"ok": True, "data": {"values": [["DOC-1", "101"]]}}
+
+    monkeypatch.setattr(it, "_request", fake_request)
+    tools = {t.__name__: t for t in it.make_integration_tools(secrets)}
+
+    read = tools["sheets_read_range"]("sheet-1", "Document Register!A1:B10")
+    assert read["ok"] is True
+    assert calls[-1]["method"] == "GET"
+    assert "Document%20Register%21A1%3AB10" in calls[-1]["url"]
+    assert tools["sheets_read_range"].__aisuite_tool_metadata__.requires_approval is False
+
+    tools["sheets_update_values"](
+        "sheet-1", "Document Register!A2:B2", [["DOC-1", "101"]]
+    )
+    assert calls[-1]["method"] == "PUT"
+    assert calls[-1]["params"] == {"valueInputOption": "USER_ENTERED"}
+    assert calls[-1]["json"]["values"] == [["DOC-1", "101"]]
+    assert tools["sheets_update_values"].__aisuite_tool_metadata__.requires_approval is True
+
+    tools["sheets_append_rows"]("sheet-1", "Audit Log!A:F", [["DOC-1", "approved"]])
+    assert calls[-1]["method"] == "POST"
+    assert calls[-1]["url"].endswith("Audit%20Log%21A%3AF:append")
+    assert tools["sheets_append_rows"].__aisuite_tool_metadata__.requires_approval is True
+
+
+def test_drive_image_enters_vision_and_move_is_approval_gated(tmp_path, monkeypatch):
+    import coworker.connectors.integration_tools as it
+
+    secrets = SecretStore(tmp_path / "secrets.json")
+    secrets.put("google_drive:default", {"access_token": "ya29.drive", "enabled": True})
+    calls = []
+
+    def fake_request(method, url, *, headers=None, params=None, json=None, auth=None):
+        calls.append({"method": method, "url": url, "params": params, "json": json})
+        if params == {"alt": "media"}:
+            return {
+                "ok": True,
+                "data": {"mime_type": "image/jpeg", "base64": "aW52b2ljZQ=="},
+            }
+        if params == {"fields": "parents"}:
+            return {"ok": True, "data": {"parents": ["intake-folder"]}}
+        if method == "PATCH":
+            return {"ok": True, "data": {"id": "img-1", "name": json.get("name")}}
+        return {
+            "ok": True,
+            "data": {
+                "id": "img-1",
+                "name": "IMG_0101.jpg",
+                "mimeType": "image/jpeg",
+                "parents": ["intake-folder"],
+            },
+        }
+
+    monkeypatch.setattr(it, "_request", fake_request)
+    tools = {t.__name__: t for t in it.make_integration_tools(secrets)}
+
+    image = tools["drive_read_image"]("img-1")
+    assert image["vision_ready"] is True
+    assert image["_vision_attachment"]["data_url"] == "data:image/jpeg;base64,aW52b2ljZQ=="
+    assert tools["drive_read_image"].__aisuite_tool_metadata__.requires_approval is False
+
+    tools["drive_update_file"](
+        "img-1",
+        name="2026-09-20_SalesInvoice_Acme_INV-101_1080USD.jpg",
+        destination_folder_id="sales-folder",
+    )
+    patch_call = calls[-1]
+    assert patch_call["method"] == "PATCH"
+    assert patch_call["params"]["addParents"] == "sales-folder"
+    assert patch_call["params"]["removeParents"] == "intake-folder"
+    assert tools["drive_update_file"].__aisuite_tool_metadata__.requires_approval is True
+
+
 def test_notion_read_page_flattens_blocks(tmp_path, monkeypatch):
     import coworker.connectors.integration_tools as it
     from coworker.connectors import accounts
@@ -1503,6 +1589,9 @@ def test_new_write_tools_require_approval(tmp_path, monkeypatch):
         "close_log_note",
         "figma_post_comment",
         "docusign_send_from_template",
+        "sheets_update_values",
+        "sheets_append_rows",
+        "drive_update_file",
     ):
         assert tools[name].__aisuite_tool_metadata__.requires_approval is True, name
     for name in (
@@ -1512,6 +1601,9 @@ def test_new_write_tools_require_approval(tmp_path, monkeypatch):
         "drive_read_file",
         "figma_export_images",
         "docusign_list_envelopes",
+        "sheets_get_spreadsheet",
+        "sheets_read_range",
+        "drive_read_image",
         "canva_export_design",
     ):
         assert tools[name].__aisuite_tool_metadata__.requires_approval is False, name

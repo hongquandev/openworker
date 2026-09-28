@@ -1439,7 +1439,7 @@ def test_audit_log_ocsf_shape_and_write_failure(tmp_path):
     assert event["class_uid"] == 3004 and event["category_uid"] == 3
     assert event["activity_id"] == 1 and event["type_uid"] == 300401
     assert event["entity"] == {"type": "machine", "name": "my-box", "uid": "m1"}
-    assert event["metadata"]["product"]["name"] == "OpenWorker"
+    assert event["metadata"]["product"]["name"] == "GastroWorker"
     assert event["unmapped"] == {"fingerprint": "abcd"}
     assert event["time"] > 0 and event["status_id"] == 1
     # A write failure never breaks the audited action — it is counted instead.

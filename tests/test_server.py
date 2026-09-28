@@ -62,7 +62,7 @@ def test_agents_and_memory_rest(tmp_path):
     client = _client(tmp_path, [])
     agents = client.get("/v1/agents").json()["agents"]
     # The picker lists enabled+surfaced personas. Release lineup (owner 2026-08-21):
-    # OpenWorker + the security bundles; Code ships disabled, Chat is gone, and
+    # GastroWorker + the security bundles; Code ships disabled, Chat is gone, and
     # ships:false personas (teams, ops, design) need OPENWORKER_UNSHIPPED=1.
     names = [a["name"] for a in agents]
     assert names[0] == "cowork"

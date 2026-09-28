@@ -90,7 +90,7 @@ class Config:
     port: int = 8765
     # Web search provider: "duckduckgo" (keyless default) | "tavily" | "brave" (need a key).
     web_search_provider: str = "duckduckgo"
-    # OpenWorker Cloud (sign-in + managed connectors). Config, never constants:
+    # GastroWorker Cloud (sign-in + managed connectors). Config, never constants:
     # dev/staging/BYO-VPC deployments point these at their own instances.
     cloud_base_url: str = "https://api.openworker.com"
     # Auth0 tenant + API audience are registered identifiers, not branding: the
@@ -107,10 +107,18 @@ class Config:
     cloud_relay_ws_url: str = (
         "wss://l4z1paxb83.execute-api.us-east-1.amazonaws.com/ocw-connect"
     )
+    # Local-first / Standalone mode: when True (default), operates 100% locally
+    # without requiring Auth0 login, cloud telemetry, or remote OAuth broker.
+    local_mode: bool = True
+    local_user_name: str = "Local User"
+    local_user_email: str = "local@localhost"
     # Hosted machines service the union view proxies to (spec: "Union view on
     # the signed-in desktop"). Empty override ⇒ the cloud machines surface is
     # off entirely; dev/BYO deployments point elsewhere.
     cloud_machines_base: str = "https://machines.openworker.com"
+    # Dynamic workflow sync: Git repository or remote registry to pull Personas and Skills from
+    workflow_sync_url: str = ""
+    workflow_sync_branch: str = "main"
 
 
 _FIELDS = {
@@ -136,6 +144,11 @@ _FIELDS = {
     "cloud_audience",
     "cloud_relay_ws_url",
     "cloud_machines_base",
+    "local_mode",
+    "local_user_name",
+    "local_user_email",
+    "workflow_sync_url",
+    "workflow_sync_branch",
 }
 
 # These fields change what consequential actions can run without a prompt, so the normal

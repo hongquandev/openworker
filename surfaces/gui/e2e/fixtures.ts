@@ -66,7 +66,7 @@ const SETTINGS = {
 const PERSONAS = {
   internal: true,
   personas: [
-    { id: "cowork", name: "OpenWorker", icon: "cowork", tagline: "Produce a deliverable — research, analysis, scripts", requires_folder: false, builtin: true, tools: ["files", "search"], enabled: true, surfaced: true, default: true, ships: true, group: "general" },
+    { id: "cowork", name: "GastroWorker", icon: "cowork", tagline: "Produce a deliverable — research, analysis, scripts", requires_folder: false, builtin: true, tools: ["files", "search"], enabled: true, surfaced: true, default: true, ships: true, group: "general" },
     { id: "code", name: "Code", icon: "code", tagline: "Work in a codebase — files, git, shell", requires_folder: true, builtin: true, tools: ["code_files", "git"], enabled: false, surfaced: false, default: false, ships: true, group: "general" },
     // Carries a `models:` list (spec §4): the picker shows only these two; the Ollama one
     // is not runnable on the mocked machine (its /v1/settings list lacks it).
@@ -179,6 +179,8 @@ const CONNECTORS = {
     // Carries pre-connect detail copy (§38): about + access + tools drive available-detail.spec.ts.
     { name: "gmail", title: "Gmail", icon: "✉", blurb: "Search, summarize, draft, and send email.", about: "Search, summarize, and send over your Gmail.", access: ["Reads and searches your mail.", "Sends email as you.", "Never deletes mail or changes account settings."], auth: "oauth", two_way: false, channels: false, available: true, brand_color: "#ea4335", logo: "gmail", fields: [{ key: "access_token", label: "OAuth access token", secret: true, required: true, help: "", placeholder: "" }], instructions: [], connected: false, account: null, enabled: false, allowed_users: [], tools: [{ name: "gmail_search", label: "Search mail", kind: "read", description: "Search messages.", enabled: true, requires_approval: false }, { name: "gmail_send", label: "Send email", kind: "write", description: "Send a message.", enabled: true, requires_approval: true }], managed: true, managed_profile: false },
     { name: "google_calendar", title: "Google Calendar", icon: "◷", blurb: "Read availability, summarize schedules, and create events.", auth: "oauth", two_way: false, channels: false, available: true, brand_color: "#4285f4", logo: "google_calendar", fields: [{ key: "access_token", label: "OAuth access token", secret: true, required: true, help: "", placeholder: "" }], instructions: [], connected: false, account: null, enabled: false, allowed_users: [], tools: [], managed: true, managed_profile: false },
+    { name: "google_drive", title: "Google Drive", icon: "◬", blurb: "Search, browse, and read files in Google Drive.", auth: "oauth", two_way: false, channels: false, available: true, brand_color: "#4285f4", logo: "google_drive", fields: [{ key: "access_token", label: "OAuth access token", secret: true, required: true, help: "", placeholder: "" }], instructions: [], connected: true, account: "restaurant@example.com", enabled: true, allowed_users: [], tools: [{ name: "drive_list_folder", label: "List folder", kind: "read", description: "List intake files.", enabled: true, requires_approval: false }, { name: "drive_read_file", label: "Read file", kind: "read", description: "Read a Drive file.", enabled: true, requires_approval: false }], managed: true, managed_profile: true },
+    { name: "google_sheets", title: "Google Sheets", icon: "▦", blurb: "Read ranges and update restaurant workbooks with approval.", auth: "oauth", two_way: false, channels: false, available: true, brand_color: "#0f9d58", logo: "google_sheets", fields: [{ key: "access_token", label: "OAuth access token", secret: true, required: true, help: "", placeholder: "" }], instructions: [], connected: true, account: "restaurant@example.com", enabled: true, allowed_users: [], tools: [{ name: "sheets_read_range", label: "Read range", kind: "read", description: "Read worksheet values.", enabled: true, requires_approval: false }, { name: "sheets_update_values", label: "Update range", kind: "write", description: "Update worksheet values.", enabled: true, requires_approval: true }, { name: "sheets_append_rows", label: "Append rows", kind: "write", description: "Append worksheet rows.", enabled: true, requires_approval: true }], managed: true, managed_profile: true },
     // Two-mode connector: one-click with access radios (read | write) OR a private-app token.
     { name: "hubspot", title: "HubSpot", icon: "⊚", blurb: "Search CRM records; log notes and tasks, update records. No deletes.", auth: "token", two_way: false, channels: false, available: true, brand_color: "#ff7a59", logo: "hubspot", fields: [{ key: "token", label: "Private app token", secret: true, required: true, help: "", placeholder: "pat-…" }], instructions: [], connected: false, account: null, enabled: false, allowed_users: [], tools: [], managed: true, managed_profile: false },
     // Generic multi-account connector (accounts.py layer): one-click OR integration token.
@@ -255,7 +257,7 @@ const GALLERY_PERSONAS = [
     description: "A sales-focused coworker.",
     family: "knowledge",
     workspace: "deliverable",
-    publisher: "OpenWorker",
+    publisher: "GastroWorker",
     recommended_connectors: ["hubspot", "gmail"],
     risk_summary: "Declarative manifest; no executable code.",
     featured: true,
@@ -269,7 +271,7 @@ const GALLERY_PERSONAS = [
     description: "A recruiting coworker.",
     family: "knowledge",
     workspace: "deliverable",
-    publisher: "OpenWorker",
+    publisher: "GastroWorker",
     recommended_connectors: ["gmail"],
     risk_summary: "Declarative manifest; no executable code.",
     featured: false,
@@ -280,7 +282,7 @@ const GALLERY_PERSONAS = [
 // `default_connections` as arrays, so these must be present (not the catch-all {}).
 const PERSONA_DETAIL = {
   id: "cowork",
-  name: "OpenWorker",
+  name: "GastroWorker",
   icon: "cowork",
   tagline: "Produce a deliverable — research, analysis, scripts",
   description: "",
@@ -689,6 +691,7 @@ export async function mockApi(page: import("@playwright/test").Page) {
     const sid = ws.url().split("/ws/session/")[1]?.split("?")[0] || "sess-lead";
     send("ready", sid === "resume-live-1" ? { running: true } : {});
     let pendingTool = "run_shell"; // which proposal the next approval decision resolves
+    let pendingPhysicalDocument = false;
     let epicTimer: ReturnType<typeof setInterval> | null = null; // the slow stream, stoppable via interrupt
     let hadTurn = false; // a user_message landed — set_model is now a mid-session switch
     ws.onMessage((raw) => {
@@ -795,6 +798,48 @@ export async function mockApi(page: import("@playwright/test").Page) {
         if (/scan for secrets/i.test(msg.text)) {
           sendState("tool_requested", "tool-request", "installable");
           return; // suspended on the tool request
+        }
+        // Physical document Vision workflow: an actual image attachment is required.
+        // The model prepares the full review package, then a local workbook write reaches
+        // the normal platform approval gate. No OCR text path exists in this branch.
+        if (/process invoice 101/i.test(msg.text)) {
+          const images = Array.isArray(msg.attachments)
+            ? msg.attachments.filter((a: any) => a?.kind === "image")
+            : [];
+          if (images.length !== 1) {
+            send("assistant_message", {
+              text: "Vision Status: unavailable\nHuman Gate: reprocess\nAttach exactly one document image.",
+            });
+            send("turn_done");
+            return;
+          }
+          pendingPhysicalDocument = true;
+          pendingTool = "write_file";
+          const review =
+            "Document ID: DOC-2026-000101\n" +
+            "Vision Status: complete\n" +
+            "Document Type: sales_invoice\n" +
+            "Risk Level: standard\n" +
+            "Source File: invoice-101.jpg\n" +
+            "Proposed Filename: 2026-09-20_SalesInvoice_Acme_INV-101_1080USD.jpg\n" +
+            "Proposed Folder: /2026/Sales/Invoices/\n" +
+            "Duplicate Check: clear\n" +
+            "Validation: subtotal 1000.00 + tax 80.00 = total 1080.00\n" +
+            "Workbook Status: proposed\n" +
+            "Draft Status: prepared\n" +
+            "Human Gate: pending\n\n" +
+            "Field | Value | Confidence | Page | Visual evidence | Review required\n" +
+            "Invoice number | 101 | 0.99 | 1 | top-right Invoice No. box | no\n" +
+            "Total | 1080.00 USD | 0.99 | 1 | bold total at bottom-right | yes";
+          send("assistant_message", { text: review });
+          const approval = statePayload("approval", "write-file");
+          const args = {
+            path: "restaurant-documents/master-workbook-updates/DOC-2026-000101.json",
+            content: "{\"document_id\":\"DOC-2026-000101\",\"invoice_number\":\"101\",\"total\":1080,\"tax\":80}",
+          };
+          send("tool_proposed", { name: "write_file", arguments: args });
+          send("permission_required", { ...approval, arguments: args, reason: "Human approval required before recording verified invoice data." });
+          return;
         }
         // §35 compact row: a routine workspace write (content rides in the args).
         if (/write a file/i.test(msg.text)) {
@@ -908,7 +953,25 @@ export async function mockApi(page: import("@playwright/test").Page) {
         });
         send("turn_done");
       } else if (msg.type === "approval") {
-        if (pendingTool === "run_shell") {
+        if (pendingPhysicalDocument) {
+          pendingPhysicalDocument = false;
+          if (msg.decision === "deny") {
+            send("tool_finished", { name: "write_file", status: "denied" });
+            send("assistant_message", { text: "Workbook Status: blocked\nHuman Gate: rejected\nNo file, workbook, or email mutation was committed." });
+          } else {
+            send("tool_finished", { name: "write_file", status: "done", result_preview: "DOC-2026-000101 recorded" });
+            send("assistant_message", {
+              text:
+                "Document ID: DOC-2026-000101\n" +
+                "Vision Status: complete\n" +
+                "Workbook Status: recorded\n" +
+                "Draft Status: none\n" +
+                "Human Gate: approved\n" +
+                "Lifecycle: RECEIVED -> VISION_COMPLETE -> APPROVED -> FILED -> RECORDED -> COMPLETED\n" +
+                "Audit trail saved with approval provenance.",
+            });
+          }
+        } else if (pendingTool === "run_shell") {
           if (msg.decision === "deny") {
             send("tool_finished", { name: "run_shell", status: "denied" });
             send("assistant_message", { text: "Understood — skipped the command." });
@@ -2120,6 +2183,7 @@ export async function mockApi(page: import("@playwright/test").Page) {
         id: `task-ob-${automations.length}`,
         title: body.title,
         instructions: body.instructions,
+        agent: body.agent || "cowork",
         schedule: body.cron || body.fire_at,
         always_allowed: grants,
         run_count: 0,

@@ -1,6 +1,6 @@
 # Security Policy
 
-OpenWorker is a security-positioned project; we hold ourselves to the standard we
+GastroWorker is a security-positioned project; we hold ourselves to the standard we
 pitch. If you find a vulnerability, we want to hear about it.
 
 ## Reporting a vulnerability

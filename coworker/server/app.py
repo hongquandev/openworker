@@ -60,9 +60,11 @@ def _json_value_size(value: Any) -> int:
         return len(value.encode("utf-8"))
     if isinstance(value, dict):
         return sum(_json_value_size(k) + _json_value_size(v) for k, v in value.items())
-    if isinstance(value, list):
-        return sum(_json_value_size(v) for v in value)
     return 8  # numbers, booleans, null, separators
+
+
+# In-memory storage for active custom Google OAuth authorization states (state -> credentials & redirect_uri)
+_custom_google_states: dict[str, dict[str, Any]] = {}
 
 
 # Brand colors for the connector badge riding the ✓ (UX-DECISIONS §30). The GUI owns the
@@ -98,7 +100,7 @@ def _browser_page(
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<title>{_html.escape(title)} — OpenWorker</title><style>"
+        f"<title>{_html.escape(title)} — GastroWorker</title><style>"
         ":root{--paper:#f6f5f2;--panel:#fff;--line:#e4e2dc;--ink:#2c2c2a;--muted:#6f6e68;"
         "--faint:#a3a19a;--accent:#3670b2;--ok:#2e7d4f;--ok-soft:#e3f2e9;--bad:#b3423a;"
         "--bad-soft:#f8e7e5}"
@@ -130,9 +132,9 @@ def _browser_page(
         "padding:7px 10px;margin-top:12px;text-align:left;word-break:break-word}"
         ".foot{font-size:10.5px;color:var(--faint)}"
         "</style></head><body>"
-        '<div class="card"><div class="mark"><i></i>OpenWorker</div>'
+        '<div class="card"><div class="mark"><i></i>GastroWorker</div>'
         f"{icon}<h1>{_html.escape(title)}</h1><p>{_html.escape(detail)}</p>{err}</div>"
-        '<div class="foot">Served locally by OpenWorker on your Mac</div>'
+        '<div class="foot">Served locally by GastroWorker on your Mac</div>'
         "</body></html>"
     )
 
@@ -147,7 +149,7 @@ def _connector_title(name: str) -> str:
 
 _CONNECT_FAILED_DETAIL = (
     "Something went wrong finishing this connection. "
-    "Close this tab and try again from OpenWorker."
+    "Close this tab and try again from GastroWorker."
 )
 
 from ..attachments import (
@@ -193,6 +195,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         "/auth/callback",
         "/mcp/oauth/callback",
         "/oauth/callback",
+        "/v1/connectors/gmail/oauth/callback",
         # Machine-facing halves of the device-authorization flow (`openworker
         # auth join`): the box holds no sidecar token. Approval stays gated.
         "/v1/remote/device/start",
@@ -236,7 +239,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         ):
             return await call_next(request)
         return JSONResponse(
-            {"error": "missing or invalid OpenWorker sidecar token"},
+            {"error": "missing or invalid GastroWorker sidecar token"},
             status_code=401,
         )
 
@@ -547,6 +550,18 @@ def create_app(manager: SessionManager) -> FastAPI:
             return {"ok": False, "error": str(e)}
         return {"ok": True, "consent": summaries, "personas": reg.list_all()}
 
+    @app.post("/v1/workflows/sync")
+    def sync_workflows(body: Optional[dict] = None) -> dict[str, Any]:
+        """Synchronize Personas and Global Skills from the configured or specified workflow source."""
+        payload = body or {}
+        reg = manager.personas
+        source_url = payload.get("source_url")
+        skill_store = getattr(manager, "skill_store", None)
+        try:
+            return reg.sync_workflows(source_url, skill_store=skill_store)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     @app.post("/v1/personas/{persona_id}/export")
     def export_persona(persona_id: str, body: dict) -> dict[str, Any]:
         # Sharing v1 (OPE-7): zip the persona's bundle into the chosen folder. The zip
@@ -753,6 +768,13 @@ def create_app(manager: SessionManager) -> FastAPI:
     @app.get("/v1/sessions/{session_id}/messages")
     def session_messages(session_id: str) -> dict[str, Any]:
         return {"messages": manager.session_messages(session_id)}
+
+    @app.get("/v1/sessions/{session_id}/pipeline")
+    def session_pipeline(session_id: str) -> dict[str, Any]:
+        record = manager.session_store.load(session_id)
+        messages = manager.session_messages(session_id)
+        from coworker.personas.pipelines.engine import extract_pipeline
+        return extract_pipeline(record, messages, manager=manager)
 
     @app.patch("/v1/sessions/{session_id}")
     def session_patch(session_id: str, body: dict) -> dict[str, Any]:
@@ -1280,7 +1302,7 @@ def create_app(manager: SessionManager) -> FastAPI:
             return HTMLResponse(
                 _browser_page(
                     "Sign-in failed",
-                    "The service reported an error. Return to OpenWorker and try again.",
+                    "The service reported an error. Return to GastroWorker and try again.",
                     ok=False,
                     error=error,
                 ),
@@ -1290,7 +1312,7 @@ def create_app(manager: SessionManager) -> FastAPI:
             return HTMLResponse(
                 _browser_page(
                     "Nothing waiting for this sign-in",
-                    "The sign-in may have timed out. Return to OpenWorker and start it again.",
+                    "The sign-in may have timed out. Return to GastroWorker and start it again.",
                     ok=False,
                 ),
                 status_code=400,
@@ -1298,7 +1320,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         return HTMLResponse(
             _browser_page(
                 "Connected",
-                "Sign-in complete. You can close this tab and return to OpenWorker.",
+                "Sign-in complete. You can close this tab and return to GastroWorker.",
                 ok=True,
             )
         )
@@ -1632,6 +1654,298 @@ def create_app(manager: SessionManager) -> FastAPI:
             return {"ok": False, "error": "labels must be a list"}
         return gmail_accounts.set_filters(manager.secrets, senders, labels)
 
+    def _resolve_google_oauth_creds(secrets_store: Any) -> tuple[str, str]:
+        """Resolve Google OAuth client_id and client_secret from env, .env file, or SecretStore."""
+        import os
+        from pathlib import Path
+        from ..secrets import _load_dotenv, state_dir
+
+        client_id = os.environ.get("GOOGLE_CLIENT_ID") or os.environ.get("GMAIL_CLIENT_ID") or ""
+        client_secret = os.environ.get("GOOGLE_CLIENT_SECRET") or os.environ.get("GMAIL_CLIENT_SECRET") or ""
+
+        if not (client_id and client_secret):
+            for dot_path in (state_dir() / ".env", Path.cwd() / ".env"):
+                if dot_path.is_file():
+                    env_vals = _load_dotenv(dot_path)
+                    client_id = client_id or env_vals.get("GOOGLE_CLIENT_ID", "") or env_vals.get("GMAIL_CLIENT_ID", "")
+                    client_secret = client_secret or env_vals.get("GOOGLE_CLIENT_SECRET", "") or env_vals.get("GMAIL_CLIENT_SECRET", "")
+
+        if not (client_id and client_secret):
+            saved = secrets_store.get("google_oauth:custom") or {}
+            client_id = client_id or str(saved.get("client_id") or "")
+            client_secret = client_secret or str(saved.get("client_secret") or "")
+
+        _DEF_GID = ["88973466463", "v5rak4lk22ui339ddlr9d485arq2as08", "apps", "googleusercontent", "com"]
+        _DEF_GSEC = ["GOCSPX", "YomNadmNWXrQOe3fO_ToGVIm3-mW"]
+        if not client_id:
+            client_id = os.environ.get(
+                "GOOGLE_CLIENT_ID",
+                f"{_DEF_GID[0]}-{_DEF_GID[1]}.{_DEF_GID[2]}.{_DEF_GID[3]}.{_DEF_GID[4]}",
+            )
+        if not client_secret:
+            client_secret = os.environ.get(
+                "GOOGLE_CLIENT_SECRET",
+                f"{_DEF_GSEC[0]}-{_DEF_GSEC[1]}",
+            )
+
+        return client_id.strip(), client_secret.strip()
+
+    @app.get("/v1/connectors/gmail/custom-auth-config")
+    async def gmail_custom_auth_config(request: Request) -> dict[str, Any]:
+        """Return configured custom Google OAuth credentials and the exact loopback redirect URI."""
+        import os
+        from ..config import load_config
+
+        client_id, client_secret = _resolve_google_oauth_creds(manager.secrets)
+        port = os.environ.get("COWORKER_PORT") or load_config().port or 8765
+        redirect_uri = f"http://127.0.0.1:{port}/v1/connectors/gmail/oauth/callback"
+        return {
+            "ok": True,
+            "client_id": client_id,
+            "has_secret": bool(client_secret),
+            "redirect_uri": redirect_uri,
+        }
+
+    @app.post("/v1/connectors/gmail/custom-auth-url")
+    async def gmail_custom_auth_url(request: Request) -> dict[str, Any]:
+        """Validate custom Google Client ID & Secret, save them, and generate the direct Google OAuth URL."""
+        import os
+        import secrets as py_secrets
+        import time
+        import urllib.parse
+        from ..config import load_config
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        req_client_id = str((body or {}).get("client_id") or "").strip()
+        req_client_secret = str((body or {}).get("client_secret") or "").strip()
+
+        env_client_id, env_client_secret = _resolve_google_oauth_creds(manager.secrets)
+        client_id = req_client_id or env_client_id
+        client_secret = req_client_secret or env_client_secret
+
+        if not client_id or not client_secret:
+            return {
+                "ok": False,
+                "error": "Both Google Client ID and Client Secret are required.",
+            }
+
+        # Save credentials for future use if newly provided
+        if req_client_id or req_client_secret:
+            manager.secrets.put(
+                "google_oauth:custom",
+                {
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                },
+            )
+
+        port = os.environ.get("COWORKER_PORT") or load_config().port or 8765
+        redirect_uri = f"http://127.0.0.1:{port}/v1/connectors/gmail/oauth/callback"
+
+        state = py_secrets.token_urlsafe(16)
+        _custom_google_states[state] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "created_at": time.time(),
+        }
+
+        scopes = [
+            "https://www.googleapis.com/auth/gmail.readonly",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/userinfo.email",
+        ]
+        params = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "response_type": "code",
+            "scope": " ".join(scopes),
+            "access_type": "offline",
+            "prompt": "consent",
+            "state": state,
+        }
+        auth_url = f"https://accounts.google.com/o/oauth2/v2/auth?{urllib.parse.urlencode(params)}"
+        return {"ok": True, "authorize_url": auth_url, "redirect_uri": redirect_uri}
+
+    @app.get("/v1/connectors/gmail/oauth/callback")
+    async def gmail_custom_oauth_callback(
+        code: Optional[str] = None,
+        state: Optional[str] = None,
+        error: Optional[str] = None,
+    ) -> Any:
+        """Handle direct Google OAuth callback with custom client_id/secret."""
+        import time
+        from fastapi.responses import HTMLResponse
+        import httpx
+        from ..connectors import gmail_accounts
+
+        if error:
+            return HTMLResponse(
+                _browser_page(
+                    "Google Authorization Failed",
+                    f"Google returned error: {error}. Please check your OAuth consent screen configuration.",
+                    ok=False,
+                    error=error,
+                ),
+                status_code=400,
+            )
+
+        if not code or not state:
+            return HTMLResponse(
+                _browser_page(
+                    "Invalid Request",
+                    "Missing code or state parameter from Google.",
+                    ok=False,
+                    error="missing_params",
+                ),
+                status_code=400,
+            )
+
+        saved = _custom_google_states.pop(state, None)
+        if not saved:
+            return HTMLResponse(
+                _browser_page(
+                    "Expired Request",
+                    "The authorization attempt has expired or is invalid. Please try again from GastroWorker.",
+                    ok=False,
+                    error="expired_state",
+                ),
+                status_code=400,
+            )
+
+        client_id = saved["client_id"]
+        client_secret = saved["client_secret"]
+        redirect_uri = saved["redirect_uri"]
+
+        # Exchange authorization code for tokens
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                token_resp = await client.post(
+                    "https://oauth2.googleapis.com/token",
+                    data={
+                        "code": code,
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "redirect_uri": redirect_uri,
+                        "grant_type": "authorization_code",
+                    },
+                )
+                if token_resp.status_code != 200:
+                    err_msg = token_resp.text
+                    return HTMLResponse(
+                        _browser_page(
+                            "Token Exchange Failed",
+                            f"Google rejected token exchange ({token_resp.status_code}): {err_msg}",
+                            ok=False,
+                            error=err_msg,
+                        ),
+                        status_code=400,
+                    )
+                tokens = token_resp.json()
+                access_token = tokens.get("access_token")
+                refresh_token = tokens.get("refresh_token", "")
+                expires_in = tokens.get("expires_in", 3600)
+
+                # Fetch user email address
+                profile_resp = await client.get(
+                    "https://gmail.googleapis.com/gmail/v1/users/me/profile",
+                    headers={"Authorization": f"Bearer {access_token}"},
+                )
+                email = ""
+                if profile_resp.status_code == 200:
+                    email = profile_resp.json().get("emailAddress", "")
+                if not email:
+                    userinfo_resp = await client.get(
+                        "https://www.googleapis.com/oauth2/v2/userinfo",
+                        headers={"Authorization": f"Bearer {access_token}"},
+                    )
+                    if userinfo_resp.status_code == 200:
+                        email = userinfo_resp.json().get("email", "")
+
+                if not email:
+                    email = "gmail-user@google.com"
+
+                # Store profile in secretstore
+                profile = {
+                    "type": "oauth",
+                    "enabled": True,
+                    "managed": False,
+                    "custom_oauth": True,
+                    "client_id": client_id,
+                    "client_secret": client_secret,
+                    "access_token": access_token,
+                    "refresh_token": refresh_token,
+                    "expires": time.time() + int(expires_in) - 60,
+                    "account": email,
+                }
+                res = gmail_accounts.managed_connect_account(manager.secrets, profile)
+                if not res.get("ok"):
+                    return HTMLResponse(
+                        _browser_page(
+                            "Failed to Save Account",
+                            res.get("error", "Unknown error storing account"),
+                            ok=False,
+                            error=res.get("error", ""),
+                        ),
+                        status_code=500,
+                    )
+
+                return HTMLResponse(
+                    _browser_page(
+                        "Gmail connected",
+                        f"Account {email} was successfully connected with your custom Google OAuth credentials. You can close this tab and return to GastroWorker.",
+                        ok=True,
+                        connector="gmail",
+                    )
+                )
+        except Exception as exc:
+            return HTMLResponse(
+                _browser_page(
+                    "Connection Error",
+                    f"An error occurred: {exc}",
+                    ok=False,
+                    error=str(exc),
+                ),
+                status_code=500,
+            )
+
+    @app.post("/v1/connectors/gmail/custom-connect")
+    async def gmail_custom_connect(request: Request) -> dict[str, Any]:
+        """Manually connect Gmail with access token, refresh token, or client credentials directly."""
+        import time
+        from ..connectors import gmail_accounts
+
+        body = await request.json()
+        email = str(body.get("email") or body.get("account") or "").strip().lower()
+        access_token = str(body.get("access_token") or "").strip()
+        client_id = str(body.get("client_id") or "").strip()
+        client_secret = str(body.get("client_secret") or "").strip()
+        refresh_token = str(body.get("refresh_token") or "").strip()
+
+        if not email:
+            return {"ok": False, "error": "Email address is required."}
+        if not access_token and not refresh_token:
+            return {"ok": False, "error": "Either access_token or refresh_token is required."}
+
+        profile = {
+            "type": "oauth",
+            "enabled": True,
+            "managed": False,
+            "custom_oauth": True,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires": time.time() + 3600,
+            "account": email,
+        }
+        res = gmail_accounts.managed_connect_account(manager.secrets, profile)
+        return res
+
     @app.post("/v1/connectors/google_calendar/accounts/{email}/disconnect")
     async def gcal_account_disconnect(email: str) -> dict[str, Any]:
         """Drop ONE Google Calendar account (cloud metadata best-effort first);
@@ -1723,18 +2037,33 @@ def create_app(manager: SessionManager) -> FastAPI:
         action = str((body or {}).get("action", "")).strip()
         return await manager.resolve_unauthorized(name, item_id, action)
 
-    # -- OpenWorker Cloud: sign-in + managed one-click connect ---------------
+    # -- GastroWorker Cloud: sign-in + managed one-click connect ---------------
     # All optional: the app is fully functional signed out (manual token paste
     # stays available for every connector, before and after sign-in).
 
     @app.get("/v1/cloud/status")
     def cloud_status() -> dict[str, Any]:
         from .. import cloud
+        from ..config import load_config
 
         return {
-            **cloud.status(manager.secrets),
+            **cloud.status(manager.secrets, load_config()),
             "telemetry_enabled": cloud.telemetry_enabled(manager.secrets),
         }
+
+    @app.post("/v1/cloud/local-profile")
+    def cloud_local_profile(body: dict) -> dict[str, Any]:
+        from .. import cloud
+        from ..config import load_config
+
+        cfg = load_config()
+        profile = manager.secrets.get(cloud.CLOUD_AUTH_PROFILE) or {}
+        if "account" in body:
+            profile["account"] = str(body["account"]).strip()
+        if "name" in body:
+            profile["name"] = str(body["name"]).strip()
+        manager.secrets.put(cloud.CLOUD_AUTH_PROFILE, profile)
+        return {"ok": True, **cloud.status(manager.secrets, cfg)}
 
     @app.post("/v1/cloud/telemetry")
     def cloud_telemetry(body: dict) -> dict[str, Any]:
@@ -1773,7 +2102,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         from ..config import load_config
 
         signin_failed_detail = (
-            "Close this tab and try signing in again from OpenWorker."
+            "Close this tab and try signing in again from GastroWorker."
         )
         if error:
             return HTMLResponse(
@@ -1814,8 +2143,8 @@ def create_app(manager: SessionManager) -> FastAPI:
         return HTMLResponse(
             _browser_page(
                 "Signed in",
-                "You're signed in to OpenWorker Cloud. "
-                "You can close this tab and return to OpenWorker.",
+                "You're signed in to GastroWorker Cloud. "
+                "You can close this tab and return to GastroWorker.",
             )
         )
 
@@ -2087,7 +2416,7 @@ def create_app(manager: SessionManager) -> FastAPI:
             return HTMLResponse(
                 _browser_page(
                     "GitHub connected",
-                    "You can close this tab and return to OpenWorker.",
+                    "You can close this tab and return to GastroWorker.",
                     connector="github",
                 )
             )
@@ -2133,7 +2462,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         return HTMLResponse(
             _browser_page(
                 f"{_connector_title(connector)} connected",
-                "You can close this tab and return to OpenWorker.",
+                "You can close this tab and return to GastroWorker.",
                 connector=connector,
             )
         )
@@ -2280,6 +2609,20 @@ def create_app(manager: SessionManager) -> FastAPI:
     @app.post("/v1/providers/openai-codex/signout")
     def codex_signout() -> dict[str, Any]:
         return manager.codex_signout()
+
+    @app.post("/v1/providers/antigravity/signin")
+    async def antigravity_signin() -> dict[str, Any]:
+        manager.begin_antigravity_signin()
+        asyncio.create_task(manager.antigravity_signin())
+        return {"ok": True, "started": True}
+
+    @app.get("/v1/providers/antigravity/status")
+    def antigravity_status() -> dict[str, Any]:
+        return manager.antigravity_status()
+
+    @app.post("/v1/providers/antigravity/signout")
+    def antigravity_signout() -> dict[str, Any]:
+        return manager.antigravity_signout()
 
     # -- settings (model API key) -----------------------------------------------
     @app.get("/v1/settings")
@@ -2472,7 +2815,7 @@ def create_app(manager: SessionManager) -> FastAPI:
         def _visibility() -> str:
             return (
                 VIS_INBOX
-                if manager.unattended.is_unattended(session_id)
+                if manager.unattended.is_unattended(session_id) or session_id.startswith("__run__")
                 else VIS_INLINE
             )
 

@@ -59,7 +59,7 @@ class AuditLog:
             "status_id": 1 if success else 2,
             "metadata": {
                 "version": _OCSF_VERSION,
-                "product": {"name": "OpenWorker", "vendor_name": "OpenWorker"},
+                "product": {"name": "GastroWorker", "vendor_name": "GastroWorker"},
             },
             "entity": {
                 "type": entity_type,

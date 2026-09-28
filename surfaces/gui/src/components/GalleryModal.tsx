@@ -34,7 +34,7 @@ const CHIP = "text-label px-1.5 py-0.5 rounded border border-line text-muted";
 type Source = "all" | "openworker" | "team";
 
 function sourceOf(p: GalleryPersona): Exclude<Source, "all"> {
-  return p.publisher === "OpenWorker" ? "openworker" : "team";
+  return p.publisher === "GastroWorker" ? "openworker" : "team";
 }
 
 function ConnectorChip({ name }: { name: string }) {
@@ -377,7 +377,7 @@ export function GalleryModal({
               {t("gallery.subtitle")}
             </div>
           </div>
-          {cloud?.signed_in && !detailSlug && (
+          {(cloud?.signed_in || cloud?.local_mode) && !detailSlug && (
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -406,7 +406,7 @@ export function GalleryModal({
                 </div>
               ))}
             </div>
-          ) : cloud && !cloud.signed_in ? (
+          ) : cloud && !cloud.signed_in && !cloud.local_mode ? (
             <div className={CARD + " p-5 flex items-center gap-4"} data-testid="gallery-signin">
               <div className="min-w-0 flex-1">
                 <div className="font-semibold text-body mb-1">{t("gallery.signin_title")}</div>

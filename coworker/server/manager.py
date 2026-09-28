@@ -333,6 +333,8 @@ class SessionManager:
         # the providers list + status route so the GUI can show "authorizing…".
         self._codex_authorizing = False
         self._codex_error: Optional[str] = None
+        self._antigravity_authorizing = False
+        self._antigravity_error: Optional[str] = None
         # http servers whose anonymous connect came back 401/403 — the failure is
         # "needs sign-in", so the GUI offers the OAuth switch instead of a raw error.
         self._mcp_auth_hints: set[str] = set()
@@ -714,7 +716,8 @@ class SessionManager:
 
         if record:
             ws = record.workspace or None
-            model, mode, messages = record.model, Mode(record.mode), record.messages
+            rec_model = (record.model or "").strip() or self.resolve_persona_model(agent_name)
+            model, mode, messages = rec_model, Mode(record.mode), record.messages
         else:
             ws = self.resolve_workspace(workspace)
             # A coworker with a `models:` list starts on the first entry this machine
@@ -3332,7 +3335,7 @@ class SessionManager:
         }
         # os.walk with in-place pruning, NOT rglob: rglob descends first and filters after,
         # so a home-directory workspace walked into ~/Library and tripped the macOS App Data
-        # TCC prompt ("OpenWorker would like to access data from other apps") on every turn.
+        # TCC prompt ("GastroWorker would like to access data from other apps") on every turn.
         # Pruning here means those directories are never entered at all.
         from ..tools.search import OS_DATA_DIRS
 
@@ -3591,6 +3594,11 @@ class SessionManager:
                 if d.name == "openai-codex":
                     row["authorizing"] = self._codex_authorizing
                     row["last_error"] = self._codex_error
+                elif d.name == "antigravity":
+                    row["authorizing"] = self._antigravity_authorizing
+                    row["last_error"] = self._antigravity_error
+                    row["available_models"] = profile.get("available_models") or []
+                    row["quota"] = profile.get("quota") or {}
             out.append(row)
         return out
 
@@ -3796,6 +3804,53 @@ class SessionManager:
         self._refresh_provider("openai-codex")
         return {"ok": True, "had_tokens": had_tokens}
 
+    # -- Google Antigravity subscription provider ------------------------------
+    def begin_antigravity_signin(self) -> None:
+        self._antigravity_authorizing = True
+        self._antigravity_error = None
+
+    async def antigravity_signin(self) -> dict[str, Any]:
+        from ..providers import antigravity_auth
+
+        self._antigravity_authorizing = True
+        self._antigravity_error = None
+        try:
+            result = await antigravity_auth.sign_in(self.secrets)
+        except Exception as exc:
+            self._antigravity_error = str(exc)
+            return {"ok": False, "error": str(exc)}
+        finally:
+            self._antigravity_authorizing = False
+        self._refresh_provider("antigravity")
+        added = "antigravity:gemini-3.8-flash"
+        self.add_model(added)
+        if not self._provider_configured(self._model_provider(self.model)):
+            self.set_default_model(added)
+        return result
+
+    def antigravity_status(self) -> dict[str, Any]:
+        from ..providers import antigravity_auth
+
+        store = antigravity_auth.AntigravityTokenStore(self.secrets)
+        profile = self.secrets.get("provider:antigravity") or {}
+        return {
+            "signed_in": store.signed_in(),
+            "account": store.account_label(),
+            "authorizing": self._antigravity_authorizing,
+            "last_error": self._antigravity_error,
+            "authorize_url": antigravity_auth.last_authorize_url,
+            "available_models": profile.get("available_models") or [],
+            "quota": profile.get("quota") or {},
+        }
+
+    def antigravity_signout(self) -> dict[str, Any]:
+        from ..providers import antigravity_auth
+
+        had_tokens = antigravity_auth.AntigravityTokenStore(self.secrets).clear()
+        self._antigravity_error = None
+        self._refresh_provider("antigravity")
+        return {"ok": True, "had_tokens": had_tokens}
+
     def verify_provider(
         self, name: str, fields: Optional[dict[str, Any]]
     ) -> dict[str, Any]:
@@ -3810,7 +3865,10 @@ class SessionManager:
         if d.auth == "oauth":
             # No key form — verify from the stored token set (signed-out / expired / OK).
             from ..providers import codex_auth
+            if name == "antigravity":
+                from ..providers import antigravity_auth
 
+                return antigravity_auth.verify(self.secrets)
             return codex_auth.verify(self.secrets)
         fields = fields or {}
         profile = self.secrets.get(f"provider:{name}") or {}
@@ -3957,7 +4015,11 @@ class SessionManager:
         if requested in allowed:
             return requested
         available = [m for m in allowed if self.model_selectable(m)]
-        return available[0] if available else allowed[0]
+        if available:
+            return available[0]
+        if self.model_selectable(self.model):
+            return self.model
+        return allowed[0]
 
     def resolve_worker_model(
         self, persona_id: str, *, lead_pick: str = "", human_pick: str = "", lead_model: str = ""
@@ -4880,9 +4942,11 @@ class SessionManager:
         def _relay_token() -> str:
             return fresh_access_token(self.secrets, cloud_config) or ""
 
-        # Every relay-mode platform shares ONE cloud socket; the hub fans frames
-        # out by provider tag. Built lazily on the first relay adapter.
-        relay_ws_url = getattr(cloud_config, "cloud_relay_ws_url", "") or None
+        relay_ws_url = (
+            None
+            if getattr(cloud_config, "local_mode", False)
+            else (getattr(cloud_config, "cloud_relay_ws_url", "") or None)
+        )
         relay_hub = None
         if relay_ws_url:
             from ..connectors.relay_client import RelayHub
@@ -5817,7 +5881,7 @@ class SessionManager:
 
     # -- mention router (§31) ----------------------------------------------------
     async def _route_mention(self, event, ms: MessageSource, subs) -> None:
-        """@OpenWorker tagged in a channel. A subscribed (user-connected) coworker owns the channel
+        """@GastroWorker tagged in a channel. A subscribed (user-connected) coworker owns the channel
         and must answer; otherwise the per-thread coworker session handles it — spawned on the
         first tag, steered by follow-ups (deduped on the thread target)."""
         from ..connectors.base import format_target
@@ -6333,13 +6397,21 @@ class SessionManager:
         )
         from ..automation.models import grant_entries
 
+        agent_name = str(payload.get("agent") or "cowork").strip() or "cowork"
+        task_model = (
+            str(payload.get("model")).strip()
+            if payload.get("model")
+            else None
+        ) or self.resolve_persona_model(agent_name)
+
         task = ScheduledTask(
             title=title,
             instructions=instructions,
             schedule=schedule,
             workspace="",
             origin_surface="cowork",
-            agent="cowork",
+            agent=agent_name,
+            model=task_model,
             # Human-driven path (GUI form / onboarding recipes): the creating surface
             # rendered the grants, the submit IS the consent. Same validation as the
             # agent tool — only target-bound write grants survive.
@@ -6357,6 +6429,8 @@ class SessionManager:
             return {"ok": False, "error": "not found"}
         if "enabled" in changes:
             task.enabled = bool(changes["enabled"])
+        if "model" in changes:
+            task.model = str(changes["model"]).strip() or None
         if changes.get("instructions") is not None:
             task.instructions = changes["instructions"]
         if changes.get("title") is not None:
@@ -6394,7 +6468,20 @@ class SessionManager:
         run = TaskRun(
             task_id=task.id, trigger="manual"
         )  # status "running", session_id auto
+        self.unattended.set(run.session_id, True)
         self.task_store.add_run(run)
+        resolved_model = self.resolve_persona_model(task.agent, task.model)
+        self.session_store.save(
+            SessionRecord(
+                session_id=run.session_id,
+                workspace=task.workspace,
+                model=resolved_model,
+                mode="interactive",
+                messages=[],
+                title=f"Run: {task.title}",
+                agent=task.agent,
+            )
+        )
         return {
             "ok": True,
             "run_id": run.run_id,

@@ -1107,6 +1107,30 @@ TOOL_DEFS: tuple[ConnectorToolDef, ...] = (
         "Read a Drive file as text.",
     ),
     ConnectorToolDef(
+        "google_drive", "drive_read_image", "Inspect image", "read",
+        "Load a Drive image into the active vision model.",
+    ),
+    ConnectorToolDef(
+        "google_drive", "drive_update_file", "Rename or move file", "write",
+        "Rename and/or move a Drive file.", target_arg="file_id",
+    ),
+    ConnectorToolDef(
+        "google_sheets", "sheets_get_spreadsheet", "Read workbook", "read",
+        "Read spreadsheet metadata and worksheet names.",
+    ),
+    ConnectorToolDef(
+        "google_sheets", "sheets_read_range", "Read range", "read",
+        "Read values from a worksheet range.",
+    ),
+    ConnectorToolDef(
+        "google_sheets", "sheets_update_values", "Update range", "write",
+        "Update values in an exact worksheet range.", target_arg="spreadsheet_id",
+    ),
+    ConnectorToolDef(
+        "google_sheets", "sheets_append_rows", "Append rows", "write",
+        "Append rows to a worksheet.", target_arg="spreadsheet_id",
+    ),
+    ConnectorToolDef(
         "docusign",
         "docusign_list_envelopes",
         "List envelopes",

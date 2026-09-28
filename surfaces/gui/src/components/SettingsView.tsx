@@ -709,7 +709,7 @@ function PersonasSection({
 // Two deployments, two meanings of "account". On the hosted dashboard the page
 // is the signed-in identity: who you are, the organization this browser acts
 // in, and the way out (moved here from the Machines page's inline bar). On
-// desktop and self-hosted browsers it is the optional OpenWorker Cloud
+// desktop and self-hosted browsers it is the optional GastroWorker Cloud
 // sign-in — the same one the sidebar's account menu offers, given a full page.
 function AccountSection() {
   const { t } = useTranslation();

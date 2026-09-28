@@ -199,6 +199,7 @@ class ScheduledTask:
             "schedule_raw": self.schedule.to_dict(),
             "workspace": self.workspace,
             "agent": self.agent,
+            "model": self.model,
             "enabled": self.enabled,
             "next_run": self.next_run,
             "last_run": self.last_run,

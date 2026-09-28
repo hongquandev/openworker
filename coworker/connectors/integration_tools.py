@@ -140,7 +140,8 @@ def _gmail_profile(
     secrets: SecretStore, account: str = ""
 ) -> tuple[str, Optional[dict[str, Any]], Optional[dict[str, str]]]:
     """(email, profile, err) for the requested — or default — mailbox, with the
-    managed token refreshed in place. Multi-account: `gmail:account:<email>`."""
+    managed or custom-OAuth token refreshed in place. Multi-account:
+    `gmail:account:<email>`."""
     from . import gmail_accounts
 
     email, key, profile = gmail_accounts.resolve(secrets, account)
@@ -151,7 +152,7 @@ def _gmail_profile(
             else "gmail is not connected"
         )
         return "", None, {"error": hint}
-    if profile.get("managed"):
+    if profile.get("managed") or profile.get("custom_oauth"):
         from ..cloud import ensure_fresh_connector_token
         from ..config import load_config
 
@@ -340,7 +341,15 @@ def _request(
                     method, url, headers=headers, params=params, json=json, auth=auth
                 )
             ctype = resp.headers.get("content-type", "")
-            data: Any = resp.json() if "json" in ctype.lower() else resp.text
+            if "json" in ctype.lower():
+                data: Any = resp.json()
+            elif ctype.lower().startswith("image/"):
+                data = {
+                    "mime_type": ctype.split(";", 1)[0].strip().lower(),
+                    "base64": base64.b64encode(resp.content).decode("ascii"),
+                }
+            else:
+                data = resp.text
             if resp.status_code >= 400:
                 return {"error": f"HTTP {resp.status_code}", "details": data}
             return {"ok": True, "data": data}
@@ -421,7 +430,7 @@ def _github_auth(
         if not token:
             return None, {
                 "error": "github installation token unavailable "
-                "(sign in to OpenWorker Cloud and retry)"
+                "(sign in to GastroWorker Cloud and retry)"
             }
         return _github_headers(token), None
     return None, {"error": "github is not connected; missing token"}
@@ -1104,6 +1113,66 @@ def make_integration_tools(
         )
     )
 
+    def _clean_gmail_message(data: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(data, dict):
+            return data
+        headers = (data.get("payload") or {}).get("headers") or []
+        important_headers = {
+            str(h.get("name")): str(h.get("value"))
+            for h in headers
+            if str(h.get("name", "")).lower() in ("subject", "from", "to", "date")
+        }
+        body_text = ""
+        attachments = []
+
+        def _walk_parts(part):
+            nonlocal body_text
+            mime = str(part.get("mimeType", "")).lower()
+            fname = part.get("filename")
+            if fname:
+                attachments.append(fname)
+            b64 = (part.get("body") or {}).get("data")
+            if b64:
+                if mime == "text/plain" and not body_text:
+                    try:
+                        import base64
+                        text = base64.urlsafe_b64decode(b64.encode("utf-8")).decode("utf-8", errors="replace")
+                        body_text = text.strip()[:1200]
+                    except Exception:
+                        pass
+                elif mime == "text/html" and not body_text:
+                    try:
+                        import base64, re
+                        raw_html = base64.urlsafe_b64decode(b64.encode("utf-8")).decode("utf-8", errors="replace")
+                        clean = re.sub(r"<[^>]+>", " ", raw_html)
+                        clean = re.sub(r"\s+", " ", clean).strip()
+                        body_text = clean[:1000]
+                    except Exception:
+                        pass
+            for sub in part.get("parts") or []:
+                _walk_parts(sub)
+
+        payload = data.get("payload") or {}
+        _walk_parts(payload)
+        if not body_text and (payload.get("body") or {}).get("data"):
+            try:
+                import base64, re
+                raw = base64.urlsafe_b64decode(payload["body"]["data"].encode("utf-8")).decode("utf-8", errors="replace")
+                clean = re.sub(r"<[^>]+>", " ", raw)
+                clean = re.sub(r"\s+", " ", clean).strip()
+                body_text = clean[:1000]
+            except Exception:
+                pass
+
+        return {
+            "id": data.get("id"),
+            "threadId": data.get("threadId"),
+            "snippet": data.get("snippet"),
+            "headers": important_headers,
+            "body": body_text if body_text else (data.get("snippet") or ""),
+            "attachments": attachments,
+        }
+
     def gmail_get_message(message_id: str, account: str = "") -> dict[str, Any]:
         email, profile, err = _gmail_profile(secrets, account)
         if err:
@@ -1120,14 +1189,15 @@ def make_integration_tools(
             data = result.get("data") or {}
             label_map = _gmail_label_map(token) if filters["labels"] else {}
             if isinstance(data, dict) and _gmail_is_hidden(data, filters, label_map):
-                # Indistinguishable from a real miss — the agent must not be able
-                # to tell "filtered" from "gone" (a tombstone invites probing).
                 return {
                     "error": "HTTP 404",
                     "details": {"error": {"code": 404, "message": "Not Found"}},
                     "_display": {"hidden_by_filters": 1, "connector": "gmail"},
                 }
         if result.get("ok"):
+            data = result.get("data")
+            if isinstance(data, dict):
+                result["data"] = _clean_gmail_message(data)
             result["account"] = email
         return result
 
@@ -1146,7 +1216,12 @@ def make_integration_tools(
     )
 
     def gmail_send_email(
-        to: str, subject: str, body: str, cc: str = "", account: str = ""
+        to: str,
+        subject: str,
+        body: str,
+        cc: str = "",
+        account: str = "",
+        attachments: Optional[list[str] | str] = None,
     ) -> dict[str, Any]:
         email, profile, err = _gmail_profile(secrets, account)
         if err:
@@ -1156,6 +1231,72 @@ def make_integration_tools(
         if cc:
             msg["Cc"] = cc
         msg.set_content(body)
+
+        att_list: list[str] = []
+        if isinstance(attachments, str):
+            trimmed = attachments.strip()
+            if trimmed.startswith("[") and trimmed.endswith("]"):
+                try:
+                    loaded = json.loads(trimmed)
+                    if isinstance(loaded, list):
+                        att_list = [str(x) for x in loaded]
+                except Exception:
+                    att_list = [trimmed]
+            elif trimmed:
+                att_list = [trimmed]
+        elif isinstance(attachments, (list, tuple)):
+            att_list = [str(x) for x in attachments if x]
+
+        if att_list:
+            import mimetypes
+            from pathlib import Path
+
+            allowed_bases: list[Path] = [
+                Path(r.path).expanduser().resolve()
+                for r in (roots or [])
+                if getattr(r, "path", None)
+            ]
+            repo_root = Path(__file__).resolve().parents[2]
+            coworker_pkg = Path(__file__).resolve().parents[1]
+            for extra in (Path.cwd().resolve(), repo_root, coworker_pkg):
+                if extra not in allowed_bases:
+                    allowed_bases.append(extra)
+
+            for att in att_list:
+                candidate = Path(att).expanduser()
+                resolved: Optional[Path] = None
+                if candidate.is_absolute():
+                    if candidate.is_file():
+                        for b in allowed_bases:
+                            try:
+                                candidate.resolve().relative_to(b)
+                                resolved = candidate.resolve()
+                                break
+                            except ValueError:
+                                continue
+                else:
+                    for b in allowed_bases:
+                        target = (b / candidate).resolve()
+                        if target.is_file():
+                            try:
+                                target.relative_to(b)
+                                resolved = target
+                                break
+                            except ValueError:
+                                continue
+
+                if resolved is None or not resolved.is_file():
+                    return {"error": f"attachment not found or outside allowed paths: {att}"}
+
+                ctype = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
+                maintype, subtype = ctype.split("/", 1)
+                msg.add_attachment(
+                    resolved.read_bytes(),
+                    maintype=maintype,
+                    subtype=subtype,
+                    filename=resolved.name,
+                )
+
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode().rstrip("=")
         result = _request(
             "POST",
@@ -1181,6 +1322,11 @@ def make_integration_tools(
                     "body": {"type": "string"},
                     "cc": {"type": "string"},
                     "account": _ACCOUNT_PROP,
+                    "attachments": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Optional list of file paths to attach to the email (e.g. PDF forms).",
+                    },
                 },
                 ["to", "subject", "body"],
             ),
@@ -4565,7 +4711,7 @@ def make_integration_tools(
         )
     )
 
-    # --- Google Drive (read-only; deliberately no write scope) ---------------
+    # --- Google Drive -------------------------------------------------------
 
     _DRIVE = "https://www.googleapis.com/drive/v3"
     _DRIVE_FIELDS = "files(id,name,mimeType,modifiedTime,size,webViewLink)"
@@ -4728,6 +4874,294 @@ def make_integration_tools(
                 ["file_id"],
             ),
             caps=["google_drive", "read"],
+        )
+    )
+
+    def drive_read_image(file_id: str, account: str = "") -> dict[str, Any]:
+        """Return a Drive image as a private engine sidecar that becomes visual input."""
+        aid, profile, err = _account_profile(
+            secrets, "google_drive", account, "access_token"
+        )
+        if err:
+            return err
+        headers = _google_headers(profile["access_token"])
+        meta = _request(
+            "GET",
+            f"{_DRIVE}/files/{quote(file_id)}",
+            headers=headers,
+            params={"fields": "id,name,mimeType,size,parents,webViewLink"},
+        )
+        if not meta.get("ok"):
+            return _acct_result(aid, meta)
+        info = meta.get("data") or {}
+        mime = str(info.get("mimeType") or "").lower()
+        if not mime.startswith("image/"):
+            return _acct_result(aid, {"error": f"file is not an image: {mime}", "file": info})
+        body = _request(
+            "GET",
+            f"{_DRIVE}/files/{quote(file_id)}",
+            headers=headers,
+            params={"alt": "media"},
+        )
+        if not body.get("ok"):
+            return _acct_result(aid, body)
+        encoded = body.get("data") or {}
+        if not isinstance(encoded, dict) or not encoded.get("base64"):
+            return _acct_result(aid, {"error": "Drive returned no image bytes", "file": info})
+        actual_mime = str(encoded.get("mime_type") or mime)
+        return _acct_result(
+            aid,
+            {
+                "ok": True,
+                "file": info,
+                "vision_ready": True,
+                "_vision_attachment": {
+                    "name": str(info.get("name") or "drive-image"),
+                    "data_url": f"data:{actual_mime};base64,{encoded['base64']}",
+                    "source": f"google_drive:{file_id}",
+                },
+            },
+        )
+
+    drive_read_image.__name__ = "drive_read_image"
+    tools.append(
+        _attach(
+            drive_read_image,
+            _schema(
+                "drive_read_image",
+                "Load a photographed document from Drive into the active vision model. "
+                "Use this instead of drive_read_file for JPEG, PNG, WebP, or other images.",
+                {"file_id": {"type": "string"}, "account": _GEN_ACCOUNT_PROP},
+                ["file_id"],
+            ),
+            caps=["google_drive", "read", "vision"],
+        )
+    )
+
+    def drive_update_file(
+        file_id: str,
+        name: str = "",
+        destination_folder_id: str = "",
+        current_parent_id: str = "",
+        account: str = "",
+    ) -> dict[str, Any]:
+        """Rename and/or move one Drive file after the platform approval gate."""
+        aid, profile, err = _account_profile(
+            secrets, "google_drive", account, "access_token"
+        )
+        if err:
+            return err
+        if not (name.strip() or destination_folder_id.strip()):
+            return {"error": "provide name and/or destination_folder_id"}
+        headers = _google_headers(profile["access_token"])
+        old_parent = current_parent_id.strip()
+        if destination_folder_id.strip() and not old_parent:
+            meta = _request(
+                "GET",
+                f"{_DRIVE}/files/{quote(file_id)}",
+                headers=headers,
+                params={"fields": "parents"},
+            )
+            if not meta.get("ok"):
+                return _acct_result(aid, meta)
+            parents = (meta.get("data") or {}).get("parents") or []
+            old_parent = str(parents[0]) if parents else ""
+        params: dict[str, str] = {"fields": "id,name,mimeType,parents,webViewLink"}
+        if destination_folder_id.strip():
+            params["addParents"] = destination_folder_id.strip()
+            if old_parent and old_parent != destination_folder_id.strip():
+                params["removeParents"] = old_parent
+        payload = {"name": name.strip()} if name.strip() else {}
+        return _acct_result(
+            aid,
+            _request(
+                "PATCH",
+                f"{_DRIVE}/files/{quote(file_id)}",
+                headers=headers,
+                params=params,
+                json=payload,
+            ),
+        )
+
+    drive_update_file.__name__ = "drive_update_file"
+    tools.append(
+        _attach(
+            drive_update_file,
+            _schema(
+                "drive_update_file",
+                "Rename and/or move one Drive file. Requires human approval.",
+                {
+                    "file_id": {"type": "string"},
+                    "name": {"type": "string"},
+                    "destination_folder_id": {"type": "string"},
+                    "current_parent_id": {"type": "string"},
+                    "account": _GEN_ACCOUNT_PROP,
+                },
+                ["file_id"],
+            ),
+            caps=["google_drive", "write"],
+        )
+    )
+
+    # --- Google Sheets ------------------------------------------------------
+
+    _SHEETS = "https://sheets.googleapis.com/v4/spreadsheets"
+
+    def sheets_get_spreadsheet(
+        spreadsheet_id: str, account: str = ""
+    ) -> dict[str, Any]:
+        aid, profile, err = _account_profile(
+            secrets, "google_sheets", account, "access_token"
+        )
+        if err:
+            return err
+        return _acct_result(
+            aid,
+            _request(
+                "GET",
+                f"{_SHEETS}/{quote(spreadsheet_id)}",
+                headers=_google_headers(profile["access_token"]),
+                params={"fields": "spreadsheetId,properties.title,sheets.properties"},
+            ),
+        )
+
+    sheets_get_spreadsheet.__name__ = "sheets_get_spreadsheet"
+    tools.append(
+        _attach(
+            sheets_get_spreadsheet,
+            _schema(
+                "sheets_get_spreadsheet",
+                "Read spreadsheet metadata and worksheet names.",
+                {
+                    "spreadsheet_id": {"type": "string"},
+                    "account": _GEN_ACCOUNT_PROP,
+                },
+                ["spreadsheet_id"],
+            ),
+            caps=["google_sheets", "read"],
+        )
+    )
+
+    def sheets_read_range(
+        spreadsheet_id: str, range: str, account: str = ""
+    ) -> dict[str, Any]:
+        aid, profile, err = _account_profile(
+            secrets, "google_sheets", account, "access_token"
+        )
+        if err:
+            return err
+        return _acct_result(
+            aid,
+            _request(
+                "GET",
+                f"{_SHEETS}/{quote(spreadsheet_id)}/values/{quote(range, safe='')}",
+                headers=_google_headers(profile["access_token"]),
+            ),
+        )
+
+    sheets_read_range.__name__ = "sheets_read_range"
+    tools.append(
+        _attach(
+            sheets_read_range,
+            _schema(
+                "sheets_read_range",
+                "Read values from an A1-notation range in a Google spreadsheet.",
+                {
+                    "spreadsheet_id": {"type": "string"},
+                    "range": {"type": "string"},
+                    "account": _GEN_ACCOUNT_PROP,
+                },
+                ["spreadsheet_id", "range"],
+            ),
+            caps=["google_sheets", "read"],
+        )
+    )
+
+    def sheets_update_values(
+        spreadsheet_id: str,
+        range: str,
+        values: list[list[Any]],
+        account: str = "",
+    ) -> dict[str, Any]:
+        aid, profile, err = _account_profile(
+            secrets, "google_sheets", account, "access_token"
+        )
+        if err:
+            return err
+        return _acct_result(
+            aid,
+            _request(
+                "PUT",
+                f"{_SHEETS}/{quote(spreadsheet_id)}/values/{quote(range, safe='')}",
+                headers=_google_headers(profile["access_token"]),
+                params={"valueInputOption": "USER_ENTERED"},
+                json={"range": range, "majorDimension": "ROWS", "values": values},
+            ),
+        )
+
+    sheets_update_values.__name__ = "sheets_update_values"
+    tools.append(
+        _attach(
+            sheets_update_values,
+            _schema(
+                "sheets_update_values",
+                "Update an exact A1-notation range. Requires human approval.",
+                {
+                    "spreadsheet_id": {"type": "string"},
+                    "range": {"type": "string"},
+                    "values": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {}},
+                    },
+                    "account": _GEN_ACCOUNT_PROP,
+                },
+                ["spreadsheet_id", "range", "values"],
+            ),
+            caps=["google_sheets", "write"],
+        )
+    )
+
+    def sheets_append_rows(
+        spreadsheet_id: str,
+        range: str,
+        values: list[list[Any]],
+        account: str = "",
+    ) -> dict[str, Any]:
+        aid, profile, err = _account_profile(
+            secrets, "google_sheets", account, "access_token"
+        )
+        if err:
+            return err
+        return _acct_result(
+            aid,
+            _request(
+                "POST",
+                f"{_SHEETS}/{quote(spreadsheet_id)}/values/{quote(range, safe='')}:append",
+                headers=_google_headers(profile["access_token"]),
+                params={"valueInputOption": "USER_ENTERED", "insertDataOption": "INSERT_ROWS"},
+                json={"range": range, "majorDimension": "ROWS", "values": values},
+            ),
+        )
+
+    sheets_append_rows.__name__ = "sheets_append_rows"
+    tools.append(
+        _attach(
+            sheets_append_rows,
+            _schema(
+                "sheets_append_rows",
+                "Append rows to a worksheet range. Requires human approval.",
+                {
+                    "spreadsheet_id": {"type": "string"},
+                    "range": {"type": "string"},
+                    "values": {
+                        "type": "array",
+                        "items": {"type": "array", "items": {}},
+                    },
+                    "account": _GEN_ACCOUNT_PROP,
+                },
+                ["spreadsheet_id", "range", "values"],
+            ),
+            caps=["google_sheets", "write"],
         )
     )
 

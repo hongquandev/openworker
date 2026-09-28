@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import {
+  antigravityAuthStatus,
+  antigravitySignin,
+  antigravitySignout,
   codexAuthStatus,
   codexSignin,
   codexSignout,
@@ -312,7 +315,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   const poll = async () => {
     for (let i = 0; i < 150 && alive.current; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const s = await codexAuthStatus().catch(() => null);
+      const s = await (info.name === "antigravity" ? antigravityAuthStatus() : codexAuthStatus()).catch(() => null);
       if (!s) continue;
       if (s.authorize_url) setReopenUrl(s.authorize_url);
       if (s.signed_in || (!s.authorizing && s.last_error)) {
@@ -330,7 +333,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
   const start = async () => {
     setBusy(true);
     setError(null);
-    await codexSignin().catch(() => setError(t("provider.oauth_start_error")));
+    await (info.name === "antigravity" ? antigravitySignin() : codexSignin()).catch(() => setError(t("provider.oauth_start_error")));
     void poll();
   };
 
@@ -345,7 +348,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
             className="shrink-0 rounded-lg border border-line bg-panel px-3 py-1.5 text-ui text-ink hover:border-lineStrong"
             data-testid={`${tp}-oauth-signout`}
             onClick={async () => {
-              await codexSignout().catch(() => {});
+              await (info.name === "antigravity" ? antigravitySignout() : codexSignout()).catch(() => {});
               await onChanged();
             }}
           >
@@ -353,7 +356,9 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
           </button>
         </div>
         <p className="text-meta text-faint mt-2">
-          {t("provider.oauth_plan_note")}
+          {info.name === "antigravity"
+            ? "Uses your Google Antigravity subscription. Tokens stay on this computer."
+            : t("provider.oauth_plan_note")}
         </p>
       </div>
     );
@@ -366,7 +371,7 @@ function OAuthSignIn({ info, tp, onChanged }: { info: ProviderInfo; tp: string; 
         disabled={busy}
         data-testid={`${tp}-oauth-signin`}
       >
-        {busy ? t("provider.oauth_waiting") : t("provider.sign_in_chatgpt")}
+        {busy ? t("provider.oauth_waiting") : info.name === "antigravity" ? "Sign in with Google" : t("provider.sign_in_chatgpt")}
       </button>
       {busy && (
         <p className="text-meta text-faint mt-2">

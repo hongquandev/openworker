@@ -24,7 +24,7 @@ from .secrets import state_dir
 HELP = """\
 usage: openworker <command>
 
-OpenWorker — an open-source AI coworker you govern.
+GastroWorker — an open-source AI coworker you govern.
 
 commands:
   join <link>   enroll this computer as a machine, then serve

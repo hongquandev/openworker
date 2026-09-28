@@ -9,6 +9,7 @@ from .base import (
 )
 from .capabilities import capabilities_for
 from .codex_provider import CodexProvider
+from .antigravity_provider import AntigravityProvider
 from .gemini_provider import GeminiProvider
 from .openai_provider import OpenAIProvider, resolve_api_key
 from .openai_responses import OpenAIResponsesProvider
@@ -35,6 +36,7 @@ __all__ = [
     "AnthropicProvider",
     "BedrockProvider",
     "CodexProvider",
+    "AntigravityProvider",
     "GeminiProvider",
     "OpenAIProvider",
     "OpenAIResponsesProvider",

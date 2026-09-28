@@ -7,6 +7,7 @@ import {
   revealSkill,
   stageSkillUpload,
   confirmSkillUpload,
+  syncWorkflows,
   updateSkill,
   type Machine,
   type SkillRow,
@@ -93,6 +94,39 @@ export function SkillsTab({
     null,
   );
   const fileInput = useRef<HTMLInputElement>(null);
+  const [syncing, setSyncing] = useState(false);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setError("");
+    try {
+      const res = await syncWorkflows(undefined, mid);
+      if (res.ok) {
+        refresh();
+        const updatedCount = res.updated?.length || 0;
+        const addedCount = res.added?.length || 0;
+        const skillsCount = res.synced_skills?.length || 0;
+        const text =
+          updatedCount === 0 && addedCount === 0 && skillsCount === 0
+            ? t("personas.sync_up_to_date")
+            : t("personas.sync_success", {
+                updated: updatedCount,
+                added: addedCount + skillsCount,
+              });
+        setNotice({ name: t("personas.sync_workflows"), text, tone: "ok" });
+      } else {
+        setError(
+          t("personas.sync_failed", { error: res.error || "Unknown error" }),
+        );
+      }
+    } catch (e: any) {
+      setError(
+        t("personas.sync_failed", { error: e?.message || "Network error" }),
+      );
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   // Confirmation copy (SKILLS-SPEC §4.1 #2): name-first, outcome + remedy only, in words a
   // person already owns — now / everywhere / off / start a new one. Never mechanism ("the
@@ -186,17 +220,33 @@ export function SkillsTab({
           </p>
         </div>
         {/* One add-action, three doors behind it (SKILLS-SPEC §5): the list is the page. */}
-        <div className="relative shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
-            className={BTN_ACCENT}
-            aria-haspopup="menu"
-            aria-expanded={addOpen}
-            onClick={() => setAddOpen((v) => !v)}
+            className={BTN_BORDERED + " flex items-center gap-2 cursor-pointer"}
+            onClick={handleSync}
+            disabled={syncing}
+            data-testid="sync-skills-btn"
           >
-            <span className="inline-flex items-center gap-1.5">
-              <Icon name="plus" size={13} /> {t("skills.add_skill")}
+            <Icon
+              name="refresh"
+              size={13}
+              className={syncing ? "animate-spin" : ""}
+            />
+            <span>
+              {syncing ? t("personas.syncing") : t("personas.sync_workflows")}
             </span>
           </button>
+          <div className="relative shrink-0">
+            <button
+              className={BTN_ACCENT}
+              aria-haspopup="menu"
+              aria-expanded={addOpen}
+              onClick={() => setAddOpen((v) => !v)}
+            >
+              <span className="inline-flex items-center gap-1.5">
+                <Icon name="plus" size={13} /> {t("skills.add_skill")}
+              </span>
+            </button>
           {addOpen ? (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setAddOpen(false)} />
@@ -244,6 +294,7 @@ export function SkillsTab({
           ) : null}
         </div>
       </div>
+    </div>
       <input
         ref={fileInput}
         type="file"

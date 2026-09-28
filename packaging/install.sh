@@ -1,5 +1,5 @@
 #!/bin/sh
-# OpenWorker headless installer — Linux and macOS.
+# GastroWorker headless installer — Linux and macOS.
 #
 #   curl -fsSL https://openworker.com/install.sh | sh
 #
@@ -31,7 +31,7 @@ main() {
     esac
 
     if [ "$(id -u)" = "0" ]; then
-        say "note: running as root installs OpenWorker for root only. A normal user account is the usual choice."
+        say "note: running as root installs GastroWorker for root only. A normal user account is the usual choice."
     fi
 
     if command -v uv >/dev/null 2>&1; then
@@ -40,7 +40,7 @@ main() {
         installer="pipx"
     else
         command -v curl >/dev/null 2>&1 || fail "curl is needed to fetch uv. Install curl, or install uv or pipx yourself, then run this again."
-        say "Installing uv (https://docs.astral.sh/uv/) — it manages Python for OpenWorker…"
+        say "Installing uv (https://docs.astral.sh/uv/) — it manages Python for GastroWorker…"
         curl -LsSf https://astral.sh/uv/install.sh | sh
         # uv's installer puts it here; this shell has not re-read its profile yet.
         PATH="${UV_INSTALL_DIR:-${XDG_BIN_HOME:-$HOME/.local/bin}}:$HOME/.cargo/bin:$PATH"
@@ -65,7 +65,7 @@ main() {
     version_line="$("$openworker_bin" version 2>&1 || true)"
     case "$version_line" in
         *placeholder*)
-            fail "the OpenWorker runtime is not published to PyPI yet (the name holds a placeholder). See https://github.com/andrewyng/openworker"
+            fail "the GastroWorker runtime is not published to PyPI yet (the name holds a placeholder). See https://github.com/andrewyng/openworker"
             ;;
     esac
 
@@ -81,7 +81,7 @@ main() {
     esac
     say ""
     say "Next:"
-    say "  1. In the OpenWorker app: Settings > Machines > Add a machine, and copy the join link."
+    say "  1. In the GastroWorker app: Settings > Machines > Add a machine, and copy the join link."
     say "  2. Here:  openworker join <link>"
     say "  3. To keep it running in the background:  openworker machine service install"
 }

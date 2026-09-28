@@ -5,6 +5,7 @@ import {
   getPersonasIndex,
   getSessions,
   installPersona,
+  syncWorkflows,
   updatePersona,
   type Machine,
   type Persona,
@@ -51,6 +52,42 @@ export function PersonasTab({
   const [consent, setConsent] = useState<PersonaConsent[] | null>(null);
   const [showUnshipped, setShowUnshipped] = useState(false);
   const [showInstall, setShowInstall] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncNotice(null);
+    try {
+      const res = await syncWorkflows(undefined, mid);
+      if (res.ok) {
+        if (res.personas) setPersonas(res.personas);
+        else reload();
+        const updatedCount = res.updated?.length || 0;
+        const addedCount = res.added?.length || 0;
+        if (updatedCount === 0 && addedCount === 0) {
+          setSyncNotice(t("personas.sync_up_to_date"));
+        } else {
+          setSyncNotice(
+            t("personas.sync_success", { updated: updatedCount, added: addedCount }),
+          );
+        }
+        if (res.consent_needed && res.consent_needed.length > 0) {
+          setConsent(res.consent_needed);
+        }
+      } else {
+        setSyncNotice(
+          t("personas.sync_failed", { error: res.error || "Unknown error" }),
+        );
+      }
+    } catch (e: any) {
+      setSyncNotice(
+        t("personas.sync_failed", { error: e?.message || "Network error" }),
+      );
+    } finally {
+      setSyncing(false);
+    }
+  };
   // Disabling archives the persona's conversations (server-side), so when there are any we
   // arm an inline confirm (same two-step idiom as delete) instead of flipping immediately.
   const [confirmOff, setConfirmOff] = useState<string | null>(null);
@@ -237,6 +274,40 @@ export function PersonasTab({
 
   return (
     <div>
+      <div className="flex items-center justify-between pb-3 mb-4 border-b border-line">
+        <div className="text-ui font-medium text-ink">
+          {t("nav.personas")}
+        </div>
+        <button
+          className={BTN_BORDERED + " flex items-center gap-2 cursor-pointer"}
+          onClick={handleSync}
+          disabled={syncing}
+          data-testid="sync-workflows-btn"
+        >
+          <Icon
+            name="refresh"
+            size={14}
+            className={syncing ? "animate-spin" : ""}
+          />
+          <span>
+            {syncing ? t("personas.syncing") : t("personas.sync_workflows")}
+          </span>
+        </button>
+      </div>
+      {syncNotice && (
+        <div
+          className="mb-4 px-3 py-2 rounded-lg bg-accentSoft text-ui text-accent flex items-center justify-between"
+          data-testid="sync-notice"
+        >
+          <span>{syncNotice}</span>
+          <button
+            className="text-meta hover:opacity-75 cursor-pointer ml-2"
+            onClick={() => setSyncNotice(null)}
+          >
+            <Icon name="x" size={12} />
+          </button>
+        </div>
+      )}
       {index.cachedAt ? <CachedNote at={index.cachedAt} /> : null}
       {index.loading && !index.data ? (
         <LoadingRow

@@ -4,7 +4,7 @@ import { test, expect, seedMachines } from "./fixtures";
 // #/settings/{page} deep links open Settings on that page, tab browsing keeps
 // the URL current (replaceState — no history pileup), and ?m= carries the
 // machine scope for machine-scoped pages. The Account page is the APP-group
-// home for identity: OpenWorker Cloud sign-in on desktop, the Auth0 identity
+// home for identity: GastroWorker Cloud sign-in on desktop, the Auth0 identity
 // + org switcher on the hosted dashboard (moved off the Machines page).
 
 const HETZNER = {

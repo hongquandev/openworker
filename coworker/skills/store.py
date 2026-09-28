@@ -254,6 +254,20 @@ class SkillStore:
         shutil.move(str(folder), str(target))
         return {"name": name, "scope": to_scope}
 
+    def sync_skills_from_dir(self, source_dir: str | Path) -> list[str]:
+        """Copy or update skills from a source directory into the global skills folder."""
+        src = Path(source_dir)
+        if not src.is_dir():
+            return []
+        self.global_dir.mkdir(parents=True, exist_ok=True)
+        synced = []
+        for item in src.iterdir():
+            if item.is_dir() and (item / "SKILL.md").is_file():
+                dest = self.global_dir / item.name
+                shutil.copytree(item, dest, dirs_exist_ok=True)
+                synced.append(item.name)
+        return synced
+
     # -- enable / disable (personal, survives restarts) -----------------------------
     def disabled_names(self) -> set[str]:
         try:

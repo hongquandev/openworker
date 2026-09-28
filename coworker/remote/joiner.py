@@ -579,7 +579,7 @@ def cli(
         description=(
             "Manage this machine."
             if only == MACHINE_COMMANDS
-            else "Run this OpenWorker headless, joined to a controller (the desktop app or OpenWorker Cloud)."
+            else "Run this GastroWorker headless, joined to a controller (the desktop app or GastroWorker Cloud)."
         ),
     )
     sub = _Only(parser.add_subparsers(dest="command", required=True), only)
@@ -825,7 +825,7 @@ def _systemd_unit(state: Path, exe: str, name: str = "") -> str:
     label = f" ({name})" if name else ""
     return (
         "[Unit]\n"
-        f"Description=OpenWorker headless (joined machine{label})\n"
+        f"Description=GastroWorker headless (joined machine{label})\n"
         "After=network-online.target\n"
         "Wants=network-online.target\n"
         "\n"
@@ -998,7 +998,7 @@ def _launchd_plist(state: Path, exe: str, label: str) -> bytes:
 
 
 def installed_agents(agent_dir: Path) -> list[dict]:
-    """Every OpenWorker launchd agent of this user with the state dir it pins."""
+    """Every GastroWorker launchd agent of this user with the state dir it pins."""
     import plistlib
 
     rows = []

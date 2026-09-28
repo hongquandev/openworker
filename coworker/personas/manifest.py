@@ -103,6 +103,7 @@ class PersonaManifest:
     source: Optional[str] = (
         None  # where it was loaded from (path / url), for provenance
     )
+    pipeline: Optional[dict[str, Any]] = None
 
     @property
     def recommended_models(self) -> list[str]:
@@ -374,6 +375,7 @@ def parse_manifest(
         group=group,
         builtin=builtin,
         source=source,
+        pipeline=meta.get("pipeline") if isinstance(meta.get("pipeline"), dict) else None,
     )
 
 

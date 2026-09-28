@@ -22,6 +22,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+import time
 from dataclasses import dataclass, field as dataclass_field
 from typing import Any, Optional
 
@@ -470,7 +471,15 @@ class GeminiProvider(ProviderClient):
         kwargs = self._request_kwargs(
             model=model, messages=messages, tools=tools, settings=settings
         )
-        response = self._ensure_client().models.generate_content(**kwargs)
+        for attempt in range(4):
+            try:
+                response = self._ensure_client().models.generate_content(**kwargs)
+                break
+            except Exception as exc:
+                if ("503" in str(exc) or "UNAVAILABLE" in str(exc)) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
         parsed = _parse_candidate(response)
         tool_calls = [
             ToolCall(id=f"call_{i}", name=c.name, arguments=c.arguments)
@@ -510,9 +519,20 @@ class GeminiProvider(ProviderClient):
         call_sigs: list[Optional[str]] = []
         usage: Optional[TokenUsage] = None
 
+        chunks = None
+        for attempt in range(4):
+            try:
+                chunks = list(client.models.generate_content_stream(**kwargs))
+                break
+            except Exception as exc:
+                if ("503" in str(exc) or "UNAVAILABLE" in str(exc)) and attempt < 3:
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise
+
         # Unlike Anthropic, function_call parts arrive whole (args are a complete dict per
         # part), so there is no JSON accumulation — just collect parts across chunks.
-        for chunk in client.models.generate_content_stream(**kwargs):
+        for chunk in chunks:
             # Counts are cumulative per chunk; the last one seen is the final total.
             chunk_usage = _usage_from(getattr(chunk, "usage_metadata", None))
             if chunk_usage is not None:

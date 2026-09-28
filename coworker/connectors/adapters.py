@@ -403,6 +403,136 @@ class SlackAdapter(BasePlatformAdapter):
             logger.debug("slack chat_update failed", exc_info=True)
 
 
+class GitHubPollingAdapter(BasePlatformAdapter):
+    platform = "github"
+
+    def __init__(self, token: str, *, interval: float = 30.0) -> None:
+        super().__init__()
+        self._token = token.strip()
+        self._interval = max(interval, 10.0)
+        self._task: Optional[asyncio.Task] = None
+        self._last_modified: Optional[str] = None
+        self._etag: Optional[str] = None
+        self._running = False
+        self._processed_ids: set[str] = set()
+
+    async def connect(self) -> bool:
+        if not self._token:
+            return False
+        self._running = True
+        self._task = asyncio.create_task(self._poll_loop())
+        logger.info("github polling adapter started (interval=%.1fs)", self._interval)
+        return True
+
+    async def disconnect(self) -> None:
+        self._running = False
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def send(
+        self, chat_id: str, text: str, *, thread_id: Optional[str] = None
+    ) -> SendResult:
+        from .github_relay import split_thread
+        repo, num = split_thread(chat_id)
+        if not num:
+            return SendResult(False, error=f"cannot reply to bare repo {chat_id}")
+        import httpx
+        url = f"https://api.github.com/repos/{repo}/issues/{num}/comments"
+        headers = {
+            "Authorization": f"token {self._token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "GastroWorker-Local",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(url, json={"body": text}, headers=headers)
+                if resp.status_code in (200, 201):
+                    msg_id = str(resp.json().get("id", ""))
+                    return SendResult(True, message_id=msg_id)
+                return SendResult(False, error=f"github error {resp.status_code}: {resp.text}")
+        except Exception as exc:
+            return SendResult(False, error=str(exc))
+
+    async def _poll_loop(self) -> None:
+        while self._running:
+            try:
+                await self._poll_notifications()
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug("github poll error: %s", exc)
+            try:
+                await asyncio.sleep(self._interval)
+            except asyncio.CancelledError:
+                break
+
+    async def _poll_notifications(self) -> None:
+        import httpx
+        headers = {
+            "Authorization": f"token {self._token}",
+            "Accept": "application/vnd.github.v3+json",
+            "User-Agent": "GastroWorker-Local",
+        }
+        if self._etag:
+            headers["If-None-Match"] = self._etag
+        if self._last_modified:
+            headers["If-Modified-Since"] = self._last_modified
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get("https://api.github.com/notifications", headers=headers)
+            if resp.status_code == 304:
+                return
+            if resp.status_code != 200:
+                return
+
+            self._etag = resp.headers.get("ETag")
+            self._last_modified = resp.headers.get("Last-Modified")
+            items = resp.json()
+            if not isinstance(items, list):
+                return
+
+            for item in items:
+                nid = str(item.get("id", ""))
+                if nid in self._processed_ids:
+                    continue
+                self._processed_ids.add(nid)
+                if len(self._processed_ids) > 1000:
+                    self._processed_ids.clear()
+
+                subject = item.get("subject", {})
+                reason = item.get("reason", "")
+                repo_full = item.get("repository", {}).get("full_name", "")
+                sub_url = subject.get("url", "")
+                num = None
+                if sub_url:
+                    parts = sub_url.rstrip("/").split("/")
+                    if parts and parts[-1].isdigit():
+                        num = int(parts[-1])
+
+                chat_id = f"{repo_full}#{num}" if num else repo_full
+                title = subject.get("title", "")
+                text = f"[{reason}] {title} ({chat_id})"
+                source = SessionSource(
+                    platform="github",
+                    chat_id=chat_id,
+                    user_name=item.get("repository", {}).get("owner", {}).get("login"),
+                    chat_type="channel",
+                )
+                event = MessageEvent(
+                    text=text,
+                    source=source,
+                    message_id=nid,
+                    raw_event=item,
+                )
+                if self._message_handler is not None:
+                    await self._message_handler(event)
+
+
 def _load_slack_teams(secrets) -> dict[str, dict]:
     """Per-team bot tokens for managed relay, from `slack:team:<team_id>` profiles
     (written by the managed OAuth install). Returns {team_id: {bot_token, bot_user_id}}.
@@ -501,51 +631,55 @@ def make_adapter(
             )
         if profile.get("bot_token") and profile.get("app_token"):
             return SlackAdapter(profile["bot_token"], profile["app_token"])
-    if platform == "github" and profile.get("mode") == "relay":
-        from .github_installs import list_installs
-        from .github_relay import GitHubRelayAdapter
-        from .relay_client import RelayHub
+    if platform == "github":
+        if profile.get("mode") == "relay":
+            from .github_installs import list_installs
+            from .github_relay import GitHubRelayAdapter
+            from .relay_client import RelayHub
 
-        installs = (
-            {iid: prof for iid, prof in list_installs(secrets)} if secrets else {}
-        )
-        # Machine-held GitHub (machines spec §Managed events, increment 2):
-        # events drain the sealed queue by machine credential; tokens mint on
-        # the delegated route (github_installation_token's box fallback). Own
-        # hub — the poll transport is per-connection, so it can't share
-        # Slack's. Boxes only: machine_unseal never exists on the desktop.
-        if (
-            machine_unseal is not None
-            and machine_poll_base
-            and profile.get("machine_credential")
-            and profile.get("broker_user_id")
-            and profile.get("connection_id")
-        ):
-            from .machine_poll import MachinePollTransport
+            installs = (
+                {iid: prof for iid, prof in list_installs(secrets)} if secrets else {}
+            )
+            # Machine-held GitHub (machines spec §Managed events, increment 2):
+            # events drain the sealed queue by machine credential; tokens mint on
+            # the delegated route (github_installation_token's box fallback). Own
+            # hub — the poll transport is per-connection, so it can't share
+            # Slack's. Boxes only: machine_unseal never exists on the desktop.
+            if (
+                machine_unseal is not None
+                and machine_poll_base
+                and profile.get("machine_credential")
+                and profile.get("broker_user_id")
+                and profile.get("connection_id")
+            ):
+                from .machine_poll import MachinePollTransport
 
-            def _gh_poll_transport():
-                return MachinePollTransport(
-                    machine_poll_base,
-                    connection_id=str(profile["connection_id"]),
-                    user_id=str(profile["broker_user_id"]),
-                    credential=str(profile["machine_credential"]),
-                    unseal=machine_unseal,
-                    cursor_path=_poll_cursor_path(str(profile["connection_id"])),
+                def _gh_poll_transport():
+                    return MachinePollTransport(
+                        machine_poll_base,
+                        connection_id=str(profile["connection_id"]),
+                        user_id=str(profile["broker_user_id"]),
+                        credential=str(profile["machine_credential"]),
+                        unseal=machine_unseal,
+                        cursor_path=_poll_cursor_path(str(profile["connection_id"])),
+                    )
+
+                return GitHubRelayAdapter(
+                    RelayHub(machine_poll_base, lambda: "", transport_factory=_gh_poll_transport),
+                    installs=installs,
+                    token_client=github_token_client,
                 )
-
+            if not (relay_url and token_provider):
+                logger.warning(
+                    "github managed-relay configured but relay endpoint / sign-in "
+                    "unavailable — sign in and set cloud_relay_ws_url; skipping"
+                )
+                return None
+            hub = relay_hub or RelayHub(relay_url, token_provider)
             return GitHubRelayAdapter(
-                RelayHub(machine_poll_base, lambda: "", transport_factory=_gh_poll_transport),
-                installs=installs,
-                token_client=github_token_client,
+                hub, installs=installs, token_client=github_token_client
             )
-        if not (relay_url and token_provider):
-            logger.warning(
-                "github managed-relay configured but relay endpoint / sign-in "
-                "unavailable — sign in and set cloud_relay_ws_url; skipping"
-            )
-            return None
-        hub = relay_hub or RelayHub(relay_url, token_provider)
-        return GitHubRelayAdapter(
-            hub, installs=installs, token_client=github_token_client
-        )
+        token = profile.get("token") or profile.get("access_token")
+        if token:
+            return GitHubPollingAdapter(token)
     return None

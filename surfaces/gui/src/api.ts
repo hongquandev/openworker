@@ -877,12 +877,13 @@ export interface Connector {
   installations?: GithubInstallation[]; // GitHub only: App installations (managed relay)
 }
 
-// --- OpenWorker Cloud (optional sign-in; manual token paste always works) ---
+// --- GastroWorker Cloud (optional sign-in; manual token paste always works) ---
 
 export interface CloudStatus {
   signed_in: boolean;
   account: string;
   user_id: string;
+  local_mode?: boolean;
   telemetry_enabled?: boolean; // Phase 5 opt-out; signed-out users send nothing regardless
 }
 
@@ -945,7 +946,7 @@ export async function cloudLogout(): Promise<{ ok: boolean }> {
 export async function connectManaged(
   name: string,
   options?: { access?: "read" | "write" },
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; authorize_url?: string }> {
   const res = await fetch(
     `${httpBase()}/v1/connectors/${encodeURIComponent(name)}/connect-managed`,
     {
@@ -1505,6 +1506,38 @@ export async function installPersona(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  });
+  const out = await res.json();
+  if (out.ok) announcePersonasChanged();
+  return out;
+}
+
+export interface WorkflowSyncItem {
+  id?: string;
+  name: string;
+  version?: string;
+}
+
+export interface WorkflowSyncResult {
+  ok: boolean;
+  source?: string;
+  added?: WorkflowSyncItem[];
+  updated?: WorkflowSyncItem[];
+  unchanged?: WorkflowSyncItem[];
+  synced_skills?: string[];
+  consent_needed?: PersonaConsent[];
+  personas?: Persona[];
+  error?: string;
+}
+
+export async function syncWorkflows(
+  body?: { source_url?: string; force?: boolean },
+  machineId?: string | null,
+): Promise<WorkflowSyncResult> {
+  const res = await fetch(`${engineBase(machineId)}/v1/workflows/sync`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {}),
   });
   const out = await res.json();
   if (out.ok) announcePersonasChanged();
@@ -2250,6 +2283,31 @@ export async function codexSignout(): Promise<{ ok: boolean }> {
   return res.json();
 }
 
+export interface SubscriptionAuthStatus {
+  signed_in: boolean;
+  account?: string | null;
+  authorizing: boolean;
+  last_error?: string | null;
+  authorize_url?: string | null;
+  available_models?: string[];
+  quota?: Record<string, unknown>;
+}
+
+export async function antigravitySignin(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${httpBase()}/v1/providers/antigravity/signin`, { method: "POST" });
+  return res.json();
+}
+
+export async function antigravityAuthStatus(): Promise<SubscriptionAuthStatus> {
+  const res = await fetch(`${httpBase()}/v1/providers/antigravity/status`);
+  return res.json();
+}
+
+export async function antigravitySignout(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${httpBase()}/v1/providers/antigravity/signout`, { method: "POST" });
+  return res.json();
+}
+
 export async function getProviders(): Promise<ProviderInfo[]> {
   const res = await fetch(`${httpBase()}/v1/providers`);
   const data = await res.json();
@@ -2338,6 +2396,7 @@ export interface Automation {
   schedule_raw?: { kind: string; cron?: string | null; fire_at?: string | null; timezone?: string };
   workspace: string;
   agent: string;
+  model?: string | null;
   enabled: boolean;
   next_run: number | null;
   last_run: number | null;
@@ -2423,6 +2482,8 @@ export async function createAutomation(payload: {
   cron?: string;
   fire_at?: string;
   timezone?: string;
+  agent?: string;
+  model?: string;
   // §25 standing grants (the creating surface rendered them; submit IS the consent).
   // Only target-bound write entries survive server-side validation.
   permissions?: { tool: string; target: string; access: "read" | "write" }[];
@@ -2507,7 +2568,7 @@ export interface SlackMember {
 }
 
 // One channel from the workspace roster. Private channels appear only where the
-// bot is a member (Slack API constraint); is_member=false → "invite @OpenWorker" hint.
+// bot is a member (Slack API constraint); is_member=false → "invite @GastroWorker" hint.
 export interface SlackChannelEntry {
   id: string;
   name: string;
@@ -2613,6 +2674,45 @@ export async function setGmailDefaultAccount(email: string): Promise<{ ok: boole
     `${httpBase()}/v1/connectors/gmail/accounts/${encodeURIComponent(email)}/default`,
     { method: "POST" },
   );
+  return res.json();
+}
+
+export interface GoogleCustomAuthConfig {
+  ok: boolean;
+  client_id: string;
+  has_secret: boolean;
+  redirect_uri: string;
+}
+
+export async function getGoogleCustomAuthConfig(): Promise<GoogleCustomAuthConfig> {
+  const res = await fetch(`${httpBase()}/v1/connectors/gmail/custom-auth-config`);
+  return res.json();
+}
+
+export async function getGoogleCustomAuthUrl(
+  clientId: string,
+  clientSecret: string,
+): Promise<{ ok: boolean; authorize_url?: string; redirect_uri?: string; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/connectors/gmail/custom-auth-url`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ client_id: clientId, client_secret: clientSecret }),
+  });
+  return res.json();
+}
+
+export async function connectGmailCustom(payload: {
+  email: string;
+  access_token?: string;
+  refresh_token?: string;
+  client_id?: string;
+  client_secret?: string;
+}): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${httpBase()}/v1/connectors/gmail/custom-connect`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
   return res.json();
 }
 
@@ -3157,7 +3257,7 @@ export interface CloudAuthConfig {
   audience: string;
 }
 
-// The broker (OpenWorker Cloud API) a hosted deployment pairs with — set from
+// The broker (GastroWorker Cloud API) a hosted deployment pairs with — set from
 // /v1/capabilities so the dashboard can start a managed OAuth connect for a
 // machine from the browser (spec §Cloud-dashboard connect-direct).
 let cloudBase = "";
@@ -3730,5 +3830,55 @@ export async function forgetConnectorOnMachine(sourceMachineId: string, name: st
     `${machineApi(sourceMachineId)}/p/v1/connectors/${encodeURIComponent(name)}/forget-local`,
     { method: "POST" },
   );
+  return res.json();
+}
+
+export interface PipelineStage {
+  stage_id: string;
+  title: string;
+  status: "completed" | "running" | "waiting_approval" | "failed" | "pending";
+  data: Record<string, any>;
+  description?: string;
+}
+
+export interface PipelineNode {
+  node_id: string;
+  type: "trigger" | "tool" | "script" | "human_gate" | "artifact" | "summary";
+  title: string;
+  status: "completed" | "running" | "waiting_approval" | "failed" | "skipped";
+  tool_name?: string;
+  inputs?: Record<string, any>;
+  outputs?: any;
+  file_path?: string;
+  description?: string;
+}
+
+export interface PipelineRunDetail {
+  ok: boolean;
+  session_id: string;
+  persona_id: string;
+  title: string;
+  status: string;
+  has_incident?: boolean;
+  pipeline_type?: "schema" | "dynamic";
+  workflow?: string;
+  stages: PipelineStage[];
+  nodes?: PipelineNode[];
+  error?: string;
+}
+
+export async function getPipelineDetails(sessionId: string): Promise<PipelineRunDetail> {
+  const res = await fetch(`${sessionApiBase(sessionId)}/v1/sessions/${encodeURIComponent(sessionId)}/pipeline`);
+  if (!res.ok) {
+    return {
+      ok: false,
+      session_id: sessionId,
+      persona_id: "",
+      title: "",
+      status: "failed",
+      stages: [],
+      error: `HTTP ${res.status}`,
+    };
+  }
   return res.json();
 }

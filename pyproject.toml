@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openworker"
 version = "0.2.3"
-description = "OpenWorker — an open-source AI coworker you govern. The headless runtime and CLI."
+description = "GastroWorker — an open-source AI coworker you govern. The headless runtime and CLI."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

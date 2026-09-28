@@ -110,7 +110,7 @@ export function installScenario(scenario: Scenario, onSent: (r: SentRecord) => v
       return {
         internal: true,
         personas: [
-          PERSONA("cowork", "OpenWorker", "general", { default: true }),
+          PERSONA("cowork", "GastroWorker", "general", { default: true }),
           ...personaIds.filter((id) => id !== "cowork").map((id) => PERSONA(id, id, "teams")),
         ],
       };

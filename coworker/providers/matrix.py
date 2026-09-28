@@ -57,6 +57,8 @@ MATRIX: dict[str, ModelEntry] = {
     "gpt-5.6-terra": ModelEntry("GPT-5.6 Terra · OpenAI", _AGENTIC_VISION, 400_000),
     "gpt-5.6-luna": ModelEntry("GPT-5.6 Luna · OpenAI", _AGENTIC_VISION, 400_000),
     "gpt-5.5": ModelEntry("GPT-5.5 · OpenAI", _AGENTIC_VISION, 400_000),
+    "gpt-4o": ModelEntry("GPT-4o · OpenAI", _AGENTIC_VISION, 128_000),
+    "openai:gpt-4o": ModelEntry("GPT-4o · OpenAI", _AGENTIC_VISION, 128_000),
     # ChatGPT-subscription catalog (the `openai-codex` OAuth provider). Curated to the
     # ids the subscription backend actually serves; vision per the vendor's model docs,
     # PDF unverified over this backend → local fallback via pdf_support.py.
@@ -107,6 +109,15 @@ MATRIX: dict[str, ModelEntry] = {
     "openai-codex:gpt-5.1-codex-mini": ModelEntry(
         "GPT-5.1 Codex Mini · ChatGPT plan", _AGENTIC, 400_000
     ),
+    # Google Antigravity subscription catalog. Availability is account/plan dependent;
+    # the provider refreshes the live list after sign-in and the matrix only supplies
+    # stable picker defaults and capability hints.
+    "antigravity:gemini-3.8-flash": ModelEntry(
+        "Gemini 3.8 Flash · Antigravity", _AGENTIC_VISION, 1_000_000
+    ),
+    "antigravity:claude-sonnet-4.6": ModelEntry(
+        "Claude Sonnet 4.6 · Antigravity", _AGENTIC_VISION, 200_000
+    ),
     # Claude 5 generation (platform.claude.com/docs/en/models/overview, read 2026-09-08):
     # 1M context is the default and only size; 128K max output; adaptive thinking.
     # Fable 5.1 (2026-09-01) is GA; its Mythos 5.1 sibling is approved-orgs-only, so it
@@ -135,7 +146,7 @@ MATRIX: dict[str, ModelEntry] = {
         "Claude Haiku 4.5 · Anthropic", _AGENTIC_VISION, 200_000
     ),
     # Claude 4.5/4.6: kept for comparability with published evaluations of those
-    # models, so OpenWorker can be measured against them on the same model.
+    # models, so GastroWorker can be measured against them on the same model.
     "anthropic:claude-opus-4-6": ModelEntry(
         "Claude Opus 4.6 · Anthropic", _AGENTIC_VISION, 200_000
     ),

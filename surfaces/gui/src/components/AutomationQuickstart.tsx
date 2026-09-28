@@ -3,6 +3,7 @@ import { useTranslation, getI18n } from "react-i18next";
 import {
   cloudLogin,
   connectManaged,
+  getGoogleCustomAuthUrl,
   getCloudStatus,
   getConnectors,
   getRecentChannels,
@@ -56,9 +57,19 @@ interface QuickTemplate {
   needsChannel?: boolean;
   consent?: boolean; // write recipes carry the §25 consent line; reads carry disclosure
   deliver?: boolean; // Morning brief's deliver-to choice
+  needsDocumentConfig?: boolean;
   day: string;
   time: string;
-  instructions: (ctx: { repo: string; channel: string; deliver: "app" | "slack" }) => string;
+  agent?: string;
+  model?: string;
+  instructions: (ctx: {
+    repo: string;
+    channel: string;
+    deliver: "app" | "slack";
+    intakeFolderId: string;
+    processedFolderId: string;
+    spreadsheetId: string;
+  }) => string;
 }
 
 const TEMPLATES: QuickTemplate[] = [
@@ -138,6 +149,39 @@ const TEMPLATES: QuickTemplate[] = [
     instructions: () => getI18n().t("automations.tmpl_inbox_instructions"),
   },
   {
+    key: "gastrotriage",
+    titleKey: "automations.tmpl_gastro_triage_title",
+    blurbKey: "automations.tmpl_gastro_triage_blurb",
+    cadenceKey: "automations.cadence_daily",
+    conns: [{ name: "gmail", whyKey: "automations.why_food_poisoning_email" }],
+    day: "daily",
+    time: "08:30",
+    agent: "gastro-worker",
+    instructions: () => getI18n().t("automations.tmpl_gastro_triage_instructions"),
+  },
+  {
+    key: "physicaldocs",
+    titleKey: "automations.tmpl_physical_docs_title",
+    blurbKey: "automations.tmpl_physical_docs_blurb",
+    cadenceKey: "automations.cadence_daily",
+    conns: [
+      { name: "google_drive", whyKey: "automations.why_physical_docs_drive" },
+      { name: "google_sheets", whyKey: "automations.why_physical_docs_sheets" },
+      { name: "gmail", whyKey: "automations.why_physical_docs_gmail" },
+    ],
+    day: "daily",
+    time: "09:00",
+    agent: "gastro-worker",
+    model: "antigravity:gemini-3.8-flash",
+    needsDocumentConfig: true,
+    instructions: ({ intakeFolderId, processedFolderId, spreadsheetId }) =>
+      getI18n().t("automations.tmpl_physical_docs_instructions", {
+        intakeFolderId,
+        processedFolderId,
+        spreadsheetId,
+      }),
+  },
+  {
     key: "cleanup",
     titleKey: "automations.tmpl_cleanup_title",
     blurbKey: "automations.tmpl_cleanup_blurb",
@@ -158,6 +202,8 @@ export function AutomationQuickstart({
     title: string;
     instructions: string;
     cron?: string;
+    agent?: string;
+    model?: string;
     permissions?: { tool: string; target: string; access: "read" | "write" }[];
   }) => void;
 }) {
@@ -170,9 +216,12 @@ export function AutomationQuickstart({
   const [pendingConn, setPendingConn] = useState<string | null>(null);
   // §30 connect states: "opening" while the broker POST is in flight (the browser hasn't
   // appeared yet), "waiting" once it has — the handoff strip explains the out-of-band finish.
-  const [connFlow, setConnFlow] = useState<{ name: string; phase: "opening" | "waiting" } | null>(
-    null,
-  );
+  const [connFlow, setConnFlow] = useState<{
+    name: string;
+    phase: "opening" | "waiting";
+    url?: string;
+    error?: string;
+  } | null>(null);
   const [signinPhase, setSigninPhase] = useState<"opening" | "waiting" | null>(null);
   const [recent, setRecent] = useState<RecentChannel[]>([]);
   const [repo, setRepo] = useState("");
@@ -180,7 +229,20 @@ export function AutomationQuickstart({
   const [day, setDay] = useState("mon");
   const [time, setTime] = useState("09:00");
   const [deliver, setDeliver] = useState<"app" | "slack">("app");
+  const [intakeFolderId, setIntakeFolderId] = useState("");
+  const [processedFolderId, setProcessedFolderId] = useState("");
+  const [spreadsheetId, setSpreadsheetId] = useState("");
   const [consent, setConsent] = useState(true);
+
+  // Gmail's brokered OAuth is temporarily paused while the Google app completes
+  // verification. The direct custom-client flow remains available and does not
+  // require an GastroWorker Cloud session.
+  const startProviderAuth = async (name: string) => {
+    if (name === "gmail") {
+      return getGoogleCustomAuthUrl("", "");
+    }
+    return connectManaged(name);
+  };
 
   const refresh = () => {
     getConnectors().then(setConnectors).catch(() => {});
@@ -204,7 +266,13 @@ export function AutomationQuickstart({
   }, [pickedKey]);
 
   const connState = (name: string) => connectors.find((c) => c.name === name);
-  const allConnected = !picked || picked.conns.every((c) => connState(c.name)?.connected);
+  const isConnSatisfied = (name: string) => {
+    if (name === "gmail") {
+      return !!(connState("gmail")?.connected || connState("email")?.connected);
+    }
+    return !!connState(name)?.connected;
+  };
+  const allConnected = !picked || picked.conns.every((c) => isConnSatisfied(c.name));
   // §25 consent line shows the HUMAN name (owner catch 2026-07-14: it echoed the raw
   // slack:T…/C… target). Names come from a picker pick (remembered per address) or the
   // recent list; a hand-typed raw address stays raw — we never guess.
@@ -219,6 +287,21 @@ export function AutomationQuickstart({
     if (connFlow && connState(connFlow.name)?.connected) setConnFlow(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectors]);
+
+  // When in waiting phase without an authorize URL, proactively fetch one so the link is ready.
+  useEffect(() => {
+    if (connFlow && connFlow.phase === "waiting" && !connFlow.url) {
+      startProviderAuth(connFlow.name)
+        .then((res) => {
+          if (res?.authorize_url) {
+            setConnFlow((f) => (f?.name === connFlow.name ? { ...f, url: res.authorize_url } : f));
+          } else if (res && !res.ok) {
+            setConnFlow((f) => (f?.name === connFlow.name ? { ...f, error: res.error } : f));
+          }
+        })
+        .catch(() => {});
+    }
+  }, [connFlow]);
 
   // §30: the configure card scrolls into view on pick — it expands below the fold on
   // three-row grids and otherwise appears "nowhere".
@@ -236,17 +319,30 @@ export function AutomationQuickstart({
   };
 
   const startConnect = async (name: string) => {
-    if (!cloud?.signed_in) {
+    if (name !== "gmail" && !cloud?.signed_in) {
       setPendingConn(name); // the pane appears; sign-in completes it
       return;
     }
     // §30: the broker round-trip takes seconds — narrate it on the row itself.
     setConnFlow({ name, phase: "opening" });
+    const popup = window.open("about:blank", "_blank");
     // GitHub is authorize-first at the BROKER: one connect links an existing
     // installation or lands on the install page — no flow choice here anymore.
-    await connectManaged(name).catch(() => {});
+    const res = await startProviderAuth(name).catch(() => {});
+    const authUrl = res && "authorize_url" in res ? res.authorize_url : undefined;
+    if (authUrl) {
+      if (popup) popup.location.href = authUrl;
+      else try { window.open(authUrl, "_blank"); } catch {}
+    } else if (popup) {
+      popup.close();
+    }
     // The POST resolves once the system browser is off; the poll ends the waiting state.
-    setConnFlow((f) => (f?.name === name ? { name, phase: "waiting" } : f));
+    setConnFlow((f) => (f?.name === name ? {
+      name,
+      phase: "waiting",
+      url: authUrl,
+      error: res && !res.ok ? res.error : undefined,
+    } : f));
     refresh();
   };
 
@@ -271,8 +367,12 @@ export function AutomationQuickstart({
       if (pendingConn) {
         const name = pendingConn;
         setConnFlow({ name, phase: "opening" });
-        await connectManaged(name).catch(() => {});
-        setConnFlow((f) => (f?.name === name ? { name, phase: "waiting" } : f));
+        const res = await connectManaged(name).catch(() => {});
+        const authUrl = res && "authorize_url" in res ? res.authorize_url : undefined;
+        if (authUrl) {
+          try { window.open(authUrl, "_blank"); } catch {}
+        }
+        setConnFlow((f) => (f?.name === name ? { name, phase: "waiting", url: authUrl } : f));
         setPendingConn(null);
         refresh();
       }
@@ -283,8 +383,12 @@ export function AutomationQuickstart({
     if (!picked) return;
     onCreate({
       title: t(picked.titleKey),
-      instructions: picked.instructions({ repo, channel, deliver }),
+      instructions: picked.instructions({
+        repo, channel, deliver, intakeFolderId, processedFolderId, spreadsheetId,
+      }),
       cron: cronFor(day, time),
+      agent: picked.agent,
+      model: picked.model,
       permissions:
         picked.consent && consent && channel
           ? [{ tool: "send_message", target: channel, access: "write" }]
@@ -295,12 +399,14 @@ export function AutomationQuickstart({
   const gateHint = !allConnected
     ? t("automations.gate_connect", {
         names: picked?.conns
-          .filter((c) => !connState(c.name)?.connected)
-          .map((c) => connState(c.name)?.title || c.name)
+          .filter((c) => !isConnSatisfied(c.name))
+          .map((c) => (c.name === "gmail" && connState("email")?.connected ? connState("email")?.title : (connState(c.name)?.title || c.name)))
           .join(t("automations.gate_join")),
       })
     : picked?.needsChannel && !channel
       ? t("automations.gate_pick_channel")
+      : picked?.needsDocumentConfig && !(intakeFolderId && processedFolderId && spreadsheetId)
+        ? t("automations.gate_document_config")
       : "";
 
   const label = "block text-meta text-muted mt-3 mb-1";
@@ -373,18 +479,24 @@ export function AutomationQuickstart({
             </span>
           </div>
           {picked.conns.map(({ name, whyKey }) => {
-            const c = connState(name);
+            const isEmailFallback = name === "gmail" && connState("email")?.connected;
+            const c = isEmailFallback ? connState("email") : connState(name);
+            const isConnected = isEmailFallback || !!c?.connected;
             const flow = connFlow?.name === name ? connFlow : null;
             return (
               <div key={name} className="border-b border-line last:border-b-0">
                 <div className="flex items-center gap-3 py-2.5">
                   {c && <ConnectorBadge connector={c} size={26} title={c.title} />}
                   <span className="min-w-0 flex-1">
-                    <span className="block text-ui font-medium">{c?.title || name}</span>
+                    <span className="block text-ui font-medium">
+                      {isEmailFallback ? `${c?.title} (Gmail via IMAP)` : (c?.title || name)}
+                    </span>
                     <span className="block text-meta text-faint">{t(whyKey)}</span>
                   </span>
-                  {c?.connected ? (
-                    <span className="text-ui text-ok">{t("automations.connected_ok")}</span>
+                  {isConnected ? (
+                    <span className="text-ui text-ok">
+                      {isEmailFallback ? "✓ Connected (Email IMAP)" : t("automations.connected_ok")}
+                    </span>
                   ) : flow ? (
                     <span className="inline-flex items-center gap-2 text-meta text-muted">
                       <Spinner />
@@ -394,7 +506,7 @@ export function AutomationQuickstart({
                     </span>
                   ) : (
                     <button
-                      className="px-3.5 py-1 rounded-full border border-line text-ui hover:bg-paper"
+                      className="px-3.5 py-1 rounded-full border border-line text-ui hover:bg-paper cursor-pointer"
                       onClick={() => startConnect(name)}
                       data-testid={`ob-connect-${name}`}
                     >
@@ -411,10 +523,57 @@ export function AutomationQuickstart({
                   >
                     <span>↗</span>
                     <span className="flex-1 min-w-0">
-                      <b className="text-ink font-medium">
-                        {t("automations.finish_connecting", { name: c?.title || name })}
-                      </b>{" "}
-                      {t("automations.finish_connecting_desc")}
+                      {flow.error ? (
+                        <div className="text-danger">{flow.error}</div>
+                      ) : (
+                        <>
+                          <b className="text-ink font-medium">
+                            {t("automations.finish_connecting", { name: c?.title || name })}
+                          </b>{" "}
+                          {t("automations.finish_connecting_desc")}
+                        </>
+                      )}
+                      {!flow.error && <div className="mt-2.5 flex items-center gap-2">
+                        {flow.url ? (
+                          <a
+                            href={flow.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3.5 py-1.5 rounded-lg bg-accent text-accentText text-[12px] font-semibold hover:bg-accentStrong shadow-sm inline-flex items-center gap-1.5 no-underline transition-all cursor-pointer"
+                          >
+                            <span>↗</span>
+                            <span>Open Google sign-in page</span>
+                          </a>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              // Open synchronously from the user gesture so popup blockers
+                              // do not swallow the OAuth window after the API await.
+                              const popup = window.open("about:blank", "_blank");
+                              const res = await startProviderAuth(name).catch(() => {});
+                              const u = res && "authorize_url" in res ? res.authorize_url : undefined;
+                              if (u) {
+                                setConnFlow({ name, phase: "waiting", url: u });
+                                if (popup) popup.location.href = u;
+                                else window.open(u, "_blank");
+                              } else if (popup) {
+                                popup.close();
+                              }
+                            }}
+                            className="px-3.5 py-1.5 rounded-lg bg-accent text-accentText text-[12px] font-semibold hover:bg-accentStrong shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <span>↗</span>
+                            <span>Open Google sign-in page</span>
+                          </button>
+                        )}
+                      </div>
+                      }
+                      {name === "gmail" && (
+                        <div className="mt-2.5 p-2 bg-paper rounded border border-line text-[11px] text-faint">
+                          💡 <b>If blocked by Google (App is currently being tested):</b> You can connect via <b>Email (IMAP)</b> using an App Password in the Connectors menu, use your custom Google OAuth app, or click <b>{t("automations.create_btn")}</b> below.
+                        </div>
+                      )}
                     </span>
                     <button
                       className="text-faint underline hover:text-muted shrink-0"
@@ -503,6 +662,34 @@ export function AutomationQuickstart({
                   </p>
                 </>
               )}
+              {picked.needsDocumentConfig && (
+                <>
+                  <label className={label}>{t("automations.intake_folder_id")}</label>
+                  <input
+                    className={input}
+                    value={intakeFolderId}
+                    onChange={(e) => setIntakeFolderId(e.target.value.trim())}
+                    placeholder={t("automations.intake_folder_id_placeholder")}
+                    data-testid="ob-intake-folder-id"
+                  />
+                  <label className={label}>{t("automations.processed_folder_id")}</label>
+                  <input
+                    className={input}
+                    value={processedFolderId}
+                    onChange={(e) => setProcessedFolderId(e.target.value.trim())}
+                    placeholder={t("automations.processed_folder_id_placeholder")}
+                    data-testid="ob-processed-folder-id"
+                  />
+                  <label className={label}>{t("automations.master_spreadsheet_id")}</label>
+                  <input
+                    className={input}
+                    value={spreadsheetId}
+                    onChange={(e) => setSpreadsheetId(e.target.value.trim())}
+                    placeholder={t("automations.master_spreadsheet_id_placeholder")}
+                    data-testid="ob-spreadsheet-id"
+                  />
+                </>
+              )}
               <label className={label}>{t("automations.when")}</label>
               <div className="flex gap-2">
                 <div className="flex-1 min-w-0">
@@ -577,9 +764,9 @@ export function AutomationQuickstart({
             <button
               className={
                 (gateHint ? "" : "ml-auto ") +
-                "px-5 py-2 rounded-full bg-ink text-panel text-ui disabled:opacity-40"
+                "px-5 py-2 rounded-full bg-ink text-panel text-ui disabled:opacity-40 cursor-pointer"
               }
-              disabled={busy || !allConnected || (picked.needsChannel && !channel)}
+              disabled={busy || !!gateHint}
               onClick={create}
               data-testid="ob-create"
             >

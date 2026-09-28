@@ -111,7 +111,7 @@ def _resolve_channel_in(secrets: SecretStore, workspace: str, channel: str) -> t
         return None, f"no channel named #{query} in workspace {workspace}"
     c = hits[0]
     if not c.get("is_member"):
-        return None, f"found #{query}, but the bot isn't a member — invite @OpenWorker to #{query} in Slack, then retry"
+        return None, f"found #{query}, but the bot isn't a member — invite @GastroWorker to #{query} in Slack, then retry"
     return str(c["id"]), None
 
 
