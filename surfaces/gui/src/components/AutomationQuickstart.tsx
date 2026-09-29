@@ -15,6 +15,7 @@ import {
 import { ConnectorBadge } from "../connectors/ConnectorIcon";
 import { ChannelPicker } from "./SubscriptionsChip";
 import { SelectMenu } from "./SelectMenu";
+import { openExternal } from "../tauri";
 
 // The Automations quickstart (UX-DECISIONS §29): ONE template system. The former onboarding
 // recipe step (§24's role recipes) merged into the page's "Start from a template" grid — every
@@ -73,81 +74,81 @@ interface QuickTemplate {
 }
 
 const TEMPLATES: QuickTemplate[] = [
-  {
-    key: "github",
-    titleKey: "automations.tmpl_github_title",
-    blurbKey: "automations.tmpl_github_blurb",
-    cadenceKey: "automations.cadence_weekly",
-    conns: [
-      { name: "slack", whyKey: "automations.why_digest_posts" },
-      { name: "github", whyKey: "automations.why_digest_summarizes" },
-    ],
-    needsRepo: true,
-    needsChannel: true,
-    consent: true,
-    day: "mon",
-    time: "09:00",
-    instructions: ({ repo, channel }) => {
-      const gt = getI18n().t;
-      return gt("automations.tmpl_github_instructions", { repo: repo || gt("automations.tmpl_github_repo_default"), channel });
-    },
-  },
-  {
-    key: "pipeline",
-    titleKey: "automations.tmpl_pipeline_title",
-    blurbKey: "automations.tmpl_pipeline_blurb",
-    cadenceKey: "automations.cadence_weekly",
-    conns: [
-      { name: "slack", whyKey: "automations.why_digest_posts" },
-      { name: "hubspot", whyKey: "automations.why_pipeline_activity" },
-    ],
-    needsChannel: true,
-    consent: true,
-    day: "mon",
-    time: "09:00",
-    instructions: ({ channel }) => {
-      const gt = getI18n().t;
-      return gt("automations.tmpl_pipeline_instructions", { channel });
-    },
-  },
-  {
-    key: "brief",
-    titleKey: "automations.tmpl_brief_title",
-    blurbKey: "automations.tmpl_brief_blurb",
-    cadenceKey: "automations.cadence_daily",
-    conns: [
-      { name: "google_calendar", whyKey: "automations.why_meetings_gaps" },
-      { name: "gmail", whyKey: "automations.why_overnight_email" },
-    ],
-    deliver: true,
-    day: "daily",
-    time: "08:00",
-    instructions: ({ deliver }) => {
-      const gt = getI18n().t;
-      return gt("automations.tmpl_brief_instructions_prefix") +
-        (deliver === "app" ? gt("automations.tmpl_brief_save") : gt("automations.tmpl_brief_slack"));
-    },
-  },
-  {
-    key: "news",
-    titleKey: "automations.tmpl_news_title",
-    blurbKey: "automations.tmpl_news_blurb",
-    cadenceKey: "automations.cadence_daily",
-    conns: [],
-    day: "daily",
-    time: "08:00",
-    instructions: () => getI18n().t("automations.tmpl_news_instructions"),
-  },
-  {
-    key: "inboxdigest",
-    titleKey: "automations.tmpl_inbox_title",
-    blurbKey: "automations.tmpl_inbox_blurb",
-    cadenceKey: "automations.cadence_weekdays",
-    conns: [{ name: "gmail", whyKey: "automations.why_unread_email" }],
-    day: "weekdays",
-    time: "09:00",
-    instructions: () => getI18n().t("automations.tmpl_inbox_instructions"),
-  },
+  // {
+  //   key: "github",
+  //   titleKey: "automations.tmpl_github_title",
+  //   blurbKey: "automations.tmpl_github_blurb",
+  //   cadenceKey: "automations.cadence_weekly",
+  //   conns: [
+  //     { name: "slack", whyKey: "automations.why_digest_posts" },
+  //     { name: "github", whyKey: "automations.why_digest_summarizes" },
+  //   ],
+  //   needsRepo: true,
+  //   needsChannel: true,
+  //   consent: true,
+  //   day: "mon",
+  //   time: "09:00",
+  //   instructions: ({ repo, channel }) => {
+  //     const gt = getI18n().t;
+  //     return gt("automations.tmpl_github_instructions", { repo: repo || gt("automations.tmpl_github_repo_default"), channel });
+  //   },
+  // },
+  // {
+  //   key: "pipeline",
+  //   titleKey: "automations.tmpl_pipeline_title",
+  //   blurbKey: "automations.tmpl_pipeline_blurb",
+  //   cadenceKey: "automations.cadence_weekly",
+  //   conns: [
+  //     { name: "slack", whyKey: "automations.why_digest_posts" },
+  //     { name: "hubspot", whyKey: "automations.why_pipeline_activity" },
+  //   ],
+  //   needsChannel: true,
+  //   consent: true,
+  //   day: "mon",
+  //   time: "09:00",
+  //   instructions: ({ channel }) => {
+  //     const gt = getI18n().t;
+  //     return gt("automations.tmpl_pipeline_instructions", { channel });
+  //   },
+  // },
+  // {
+  //   key: "brief",
+  //   titleKey: "automations.tmpl_brief_title",
+  //   blurbKey: "automations.tmpl_brief_blurb",
+  //   cadenceKey: "automations.cadence_daily",
+  //   conns: [
+  //     { name: "google_calendar", whyKey: "automations.why_meetings_gaps" },
+  //     { name: "gmail", whyKey: "automations.why_overnight_email" },
+  //   ],
+  //   deliver: true,
+  //   day: "daily",
+  //   time: "08:00",
+  //   instructions: ({ deliver }) => {
+  //     const gt = getI18n().t;
+  //     return gt("automations.tmpl_brief_instructions_prefix") +
+  //       (deliver === "app" ? gt("automations.tmpl_brief_save") : gt("automations.tmpl_brief_slack"));
+  //   },
+  // },
+  // {
+  //   key: "news",
+  //   titleKey: "automations.tmpl_news_title",
+  //   blurbKey: "automations.tmpl_news_blurb",
+  //   cadenceKey: "automations.cadence_daily",
+  //   conns: [],
+  //   day: "daily",
+  //   time: "08:00",
+  //   instructions: () => getI18n().t("automations.tmpl_news_instructions"),
+  // },
+  // {
+  //   key: "inboxdigest",
+  //   titleKey: "automations.tmpl_inbox_title",
+  //   blurbKey: "automations.tmpl_inbox_blurb",
+  //   cadenceKey: "automations.cadence_weekdays",
+  //   conns: [{ name: "gmail", whyKey: "automations.why_unread_email" }],
+  //   day: "weekdays",
+  //   time: "09:00",
+  //   instructions: () => getI18n().t("automations.tmpl_inbox_instructions"),
+  // },
   {
     key: "gastrotriage",
     titleKey: "automations.tmpl_gastro_triage_title",
@@ -181,16 +182,16 @@ const TEMPLATES: QuickTemplate[] = [
         spreadsheetId,
       }),
   },
-  {
-    key: "cleanup",
-    titleKey: "automations.tmpl_cleanup_title",
-    blurbKey: "automations.tmpl_cleanup_blurb",
-    cadenceKey: "automations.cadence_weekly",
-    conns: [],
-    day: "fri",
-    time: "17:30",
-    instructions: () => getI18n().t("automations.tmpl_cleanup_instructions"),
-  },
+  // {
+  //   key: "cleanup",
+  //   titleKey: "automations.tmpl_cleanup_title",
+  //   blurbKey: "automations.tmpl_cleanup_blurb",
+  //   cadenceKey: "automations.cadence_weekly",
+  //   conns: [],
+  //   day: "fri",
+  //   time: "17:30",
+  //   instructions: () => getI18n().t("automations.tmpl_cleanup_instructions"),
+  // },
 ];
 
 export function AutomationQuickstart({
@@ -325,16 +326,12 @@ export function AutomationQuickstart({
     }
     // §30: the broker round-trip takes seconds — narrate it on the row itself.
     setConnFlow({ name, phase: "opening" });
-    const popup = window.open("about:blank", "_blank");
     // GitHub is authorize-first at the BROKER: one connect links an existing
     // installation or lands on the install page — no flow choice here anymore.
     const res = await startProviderAuth(name).catch(() => {});
     const authUrl = res && "authorize_url" in res ? res.authorize_url : undefined;
     if (authUrl) {
-      if (popup) popup.location.href = authUrl;
-      else try { window.open(authUrl, "_blank"); } catch {}
-    } else if (popup) {
-      popup.close();
+      openExternal(authUrl);
     }
     // The POST resolves once the system browser is off; the poll ends the waiting state.
     setConnFlow((f) => (f?.name === name ? {
@@ -370,7 +367,7 @@ export function AutomationQuickstart({
         const res = await connectManaged(name).catch(() => {});
         const authUrl = res && "authorize_url" in res ? res.authorize_url : undefined;
         if (authUrl) {
-          try { window.open(authUrl, "_blank"); } catch {}
+          openExternal(authUrl);
         }
         setConnFlow((f) => (f?.name === name ? { name, phase: "waiting", url: authUrl } : f));
         setPendingConn(null);
@@ -533,42 +530,29 @@ export function AutomationQuickstart({
                           {t("automations.finish_connecting_desc")}
                         </>
                       )}
-                      {!flow.error && <div className="mt-2.5 flex items-center gap-2">
-                        {flow.url ? (
-                          <a
-                            href={flow.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="px-3.5 py-1.5 rounded-lg bg-accent text-accentText text-[12px] font-semibold hover:bg-accentStrong shadow-sm inline-flex items-center gap-1.5 no-underline transition-all cursor-pointer"
-                          >
-                            <span>↗</span>
-                            <span>Open Google sign-in page</span>
-                          </a>
-                        ) : (
+                      {!flow.error && (
+                        <div className="mt-2.5 flex items-center gap-2">
                           <button
                             type="button"
                             onClick={async () => {
-                              // Open synchronously from the user gesture so popup blockers
-                              // do not swallow the OAuth window after the API await.
-                              const popup = window.open("about:blank", "_blank");
+                              if (flow.url) {
+                                openExternal(flow.url);
+                                return;
+                              }
                               const res = await startProviderAuth(name).catch(() => {});
                               const u = res && "authorize_url" in res ? res.authorize_url : undefined;
                               if (u) {
                                 setConnFlow({ name, phase: "waiting", url: u });
-                                if (popup) popup.location.href = u;
-                                else window.open(u, "_blank");
-                              } else if (popup) {
-                                popup.close();
+                                openExternal(u);
                               }
                             }}
-                            className="px-3.5 py-1.5 rounded-lg bg-accent text-accentText text-[12px] font-semibold hover:bg-accentStrong shadow-sm inline-flex items-center gap-1.5 cursor-pointer"
+                            className="px-3.5 py-1.5 rounded-lg bg-white text-ink border border-line hover:border-lineStrong hover:bg-paper text-[12px] font-semibold shadow-sm inline-flex items-center gap-1.5 transition-all cursor-pointer"
                           >
                             <span>↗</span>
                             <span>Open Google sign-in page</span>
                           </button>
-                        )}
-                      </div>
-                      }
+                        </div>
+                      )}
                       {name === "gmail" && (
                         <div className="mt-2.5 p-2 bg-paper rounded border border-line text-[11px] text-faint">
                           💡 <b>If blocked by Google (App is currently being tested):</b> You can connect via <b>Email (IMAP)</b> using an App Password in the Connectors menu, use your custom Google OAuth app, or click <b>{t("automations.create_btn")}</b> below.

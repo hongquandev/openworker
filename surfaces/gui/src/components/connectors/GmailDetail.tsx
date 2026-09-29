@@ -10,6 +10,7 @@ import {
   type GmailAccount,
 } from "../../api";
 import { ConnectorBadge } from "../../connectors/ConnectorIcon";
+import { openExternal } from "../../tauri";
 import type { DetailProps } from "./ConnectorsSection";
 import { ToolsDisclosure } from "./ToolsDisclosure";
 import { FOOT, GRP, GRP_H, PILL_ACCENT, ROW, TAG_ACCENT, TAG_WARN, XBTN } from "./ui";
@@ -30,7 +31,7 @@ export function GmailDetail({ c, cloud, slack: _slack, onChanged }: DetailProps)
     setBusy(true);
     const res = await connectManaged("gmail"); // completes in the system browser; the poll picks it up
     if (res?.authorize_url) {
-      try { window.open(res.authorize_url, "_blank"); } catch {}
+      openExternal(res.authorize_url);
     }
     setTimeout(() => setBusy(false), 2500);
   };
@@ -268,7 +269,7 @@ function CustomGoogleAuthSection({ onChanged }: { onChanged: () => void }) {
     try {
       const res = await getGoogleCustomAuthUrl(clientId.trim(), clientSecret.trim());
       if (res.ok && res.authorize_url) {
-        window.open(res.authorize_url, "_blank");
+        openExternal(res.authorize_url);
         // Poll every 2s for 30s to catch newly added account
         let count = 0;
         const timer = setInterval(() => {
@@ -311,7 +312,7 @@ function CustomGoogleAuthSection({ onChanged }: { onChanged: () => void }) {
       <div className="flex flex-wrap items-center gap-3 mb-3">
         <button
           type="button"
-          className="px-5 py-2 rounded-full bg-accent text-accentText text-[13px] font-medium hover:bg-accentStrong disabled:opacity-50 cursor-pointer shadow-sm flex items-center gap-1.5"
+          className="px-5 py-2 rounded-full bg-accent text-white text-[13px] font-medium hover:bg-accentStrong disabled:opacity-50 cursor-pointer shadow-sm flex items-center gap-1.5"
           onClick={handleAuthorize}
           disabled={busy}
           data-testid="gmail-custom-auth-btn"

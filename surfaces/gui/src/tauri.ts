@@ -125,14 +125,47 @@ export const clearPendingUpdate = () => invokeStrict<void>("clear_pending_update
  * Windows hands off to the installer). */
 export const installUpdate = () => invokeStrict<void>("install_update");
 
-/** Best-effort open a URL in the user's browser. Uses the Tauri opener plugin if present, else
- * `window.open`. The caller should also render the raw URL so it stays copyable if both no-op
- * (the desktop webview has no opener plugin wired yet). */
+import { openSystemBrowser } from "./api";
+
+/** Best-effort open a URL in the user's browser.
+ * On desktop (macOS / Windows / Linux), tries Tauri native command, Tauri opener plugin,
+ * or the backend sidecar browser launcher. In standard browser, uses window.open. */
 export function openExternal(url: string): void {
-  const opener = (globalThis as any).__TAURI__?.opener;
-  if (opener?.openUrl) {
-    opener.openUrl(url).catch(() => window.open(url, "_blank", "noopener,noreferrer"));
+  if (!url) return;
+  // Browser context (not running in Tauri desktop shell):
+  if (!isTauri()) {
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {}
     return;
   }
-  window.open(url, "_blank", "noopener,noreferrer");
+
+  // Desktop app context:
+  void (async () => {
+    // 1. Try native Tauri command open_url
+    try {
+      await invokeStrict<void>("open_url", { url });
+      return;
+    } catch {}
+
+    // 2. Try Tauri opener plugin if present
+    const opener = (globalThis as any).__TAURI__?.opener;
+    if (opener?.openUrl) {
+      try {
+        await opener.openUrl(url);
+        return;
+      } catch {}
+    }
+
+    // 3. Fallback to sidecar server which opens system browser via Python
+    try {
+      const res = await openSystemBrowser(url);
+      if (res.ok) return;
+    } catch {}
+
+    // 4. Final fallback
+    try {
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch {}
+  })();
 }

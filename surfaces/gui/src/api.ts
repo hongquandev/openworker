@@ -3882,3 +3882,17 @@ export async function getPipelineDetails(sessionId: string): Promise<PipelineRun
   }
   return res.json();
 }
+
+export async function openSystemBrowser(url: string): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`${httpBase()}/v1/system/open-browser`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    return res.json();
+  } catch (err: unknown) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+

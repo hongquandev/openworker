@@ -2088,6 +2088,21 @@ def create_app(manager: SessionManager) -> FastAPI:
         webbrowser.open(out["authorize_url"])
         return {"ok": True, "authorize_url": out["authorize_url"]}
 
+    @app.post("/v1/system/open-browser")
+    async def system_open_browser(request: Request) -> dict[str, Any]:
+        """Open a URL in the user's default OS browser."""
+        import webbrowser
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        url = str((body or {}).get("url") or "").strip()
+        if url.startswith(("http://", "https://")):
+            await asyncio.to_thread(webbrowser.open, url)
+            return {"ok": True}
+        return {"ok": False, "error": "Invalid URL"}
+
     @app.post("/v1/cloud/logout")
     def cloud_logout() -> dict[str, Any]:
         from .. import cloud

@@ -571,7 +571,7 @@
     "why_food_poisoning_email": "客户投诉与收据凭证",
     "tmpl_physical_docs_title": "实体文件处理",
     "tmpl_physical_docs_blurb": "使用 Agent Vision 对拍摄的发票和通知进行分类，准备归档与工作簿更新，并等待人工批准。",
-    "tmpl_physical_docs_instructions": "Workflow: physical-document-processing\n监控 Google Drive intake 文件夹中的餐厅纸质文件照片。使用 physical-document-processing 技能和模型原生 Vision 能力；不得将 OCR 作为主要证据。检查图像质量与重复文件，对文件分类，提取带逐字段置信度和视觉证据的数据，验证发票总额、税额与截止日期，并建议安全文件名和目标文件夹。准备幂等的主工作簿更新、仪表板变化、提醒和邮件草稿。在重命名或移动远程文件、写入正式工作簿数据或发送外部消息前停在人工审批门。批准后只执行获批更改并保留完整审计记录。",
+    "tmpl_physical_docs_instructions": "Workflow: physical-document-processing\nIntake folder id: {{intakeFolderId}}\nProcessed root folder id: {{processedFolderId}}\nMaster spreadsheet id: {{spreadsheetId}}\n监控 Google Drive intake 文件夹中的餐厅纸质文件照片。使用 physical-document-processing 技能和模型原生 Vision 能力；不得将 OCR 作为主要证据。检查图像质量与重复文件，对文件分类，提取带逐字段置信度和视觉证据的数据，验证发票总额、税额与截止日期，并建议安全文件名和目标文件夹。准备幂等的主工作簿更新、仪表板变化、提醒和邮件草稿。在重命名或移动远程文件、写入正式工作簿数据或发送外部消息前停在人工审批门。批准后只执行获批更改并保留完整审计记录。",
     "why_physical_docs_drive": "Intake 文件夹中的纸质文件照片",
     "why_physical_docs_sheets": "主工作簿、工作表与仪表板",
     "why_physical_docs_gmail": "政府回复与内部提醒",
