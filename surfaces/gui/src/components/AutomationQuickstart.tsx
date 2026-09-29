@@ -111,44 +111,44 @@ const TEMPLATES: QuickTemplate[] = [
   //     return gt("automations.tmpl_pipeline_instructions", { channel });
   //   },
   // },
-  // {
-  //   key: "brief",
-  //   titleKey: "automations.tmpl_brief_title",
-  //   blurbKey: "automations.tmpl_brief_blurb",
-  //   cadenceKey: "automations.cadence_daily",
-  //   conns: [
-  //     { name: "google_calendar", whyKey: "automations.why_meetings_gaps" },
-  //     { name: "gmail", whyKey: "automations.why_overnight_email" },
-  //   ],
-  //   deliver: true,
-  //   day: "daily",
-  //   time: "08:00",
-  //   instructions: ({ deliver }) => {
-  //     const gt = getI18n().t;
-  //     return gt("automations.tmpl_brief_instructions_prefix") +
-  //       (deliver === "app" ? gt("automations.tmpl_brief_save") : gt("automations.tmpl_brief_slack"));
-  //   },
-  // },
-  // {
-  //   key: "news",
-  //   titleKey: "automations.tmpl_news_title",
-  //   blurbKey: "automations.tmpl_news_blurb",
-  //   cadenceKey: "automations.cadence_daily",
-  //   conns: [],
-  //   day: "daily",
-  //   time: "08:00",
-  //   instructions: () => getI18n().t("automations.tmpl_news_instructions"),
-  // },
-  // {
-  //   key: "inboxdigest",
-  //   titleKey: "automations.tmpl_inbox_title",
-  //   blurbKey: "automations.tmpl_inbox_blurb",
-  //   cadenceKey: "automations.cadence_weekdays",
-  //   conns: [{ name: "gmail", whyKey: "automations.why_unread_email" }],
-  //   day: "weekdays",
-  //   time: "09:00",
-  //   instructions: () => getI18n().t("automations.tmpl_inbox_instructions"),
-  // },
+  {
+    key: "brief",
+    titleKey: "automations.tmpl_brief_title",
+    blurbKey: "automations.tmpl_brief_blurb",
+    cadenceKey: "automations.cadence_daily",
+    conns: [
+      { name: "google_calendar", whyKey: "automations.why_meetings_gaps" },
+      { name: "gmail", whyKey: "automations.why_overnight_email" },
+    ],
+    deliver: true,
+    day: "daily",
+    time: "08:00",
+    instructions: ({ deliver }) => {
+      const gt = getI18n().t;
+      return gt("automations.tmpl_brief_instructions_prefix") +
+        (deliver === "app" ? gt("automations.tmpl_brief_save") : gt("automations.tmpl_brief_slack"));
+    },
+  },
+  {
+    key: "news",
+    titleKey: "automations.tmpl_news_title",
+    blurbKey: "automations.tmpl_news_blurb",
+    cadenceKey: "automations.cadence_daily",
+    conns: [],
+    day: "daily",
+    time: "08:00",
+    instructions: () => getI18n().t("automations.tmpl_news_instructions"),
+  },
+  {
+    key: "inboxdigest",
+    titleKey: "automations.tmpl_inbox_title",
+    blurbKey: "automations.tmpl_inbox_blurb",
+    cadenceKey: "automations.cadence_weekdays",
+    conns: [{ name: "gmail", whyKey: "automations.why_unread_email" }],
+    day: "weekdays",
+    time: "09:00",
+    instructions: () => getI18n().t("automations.tmpl_inbox_instructions"),
+  },
   {
     key: "gastrotriage",
     titleKey: "automations.tmpl_gastro_triage_title",
