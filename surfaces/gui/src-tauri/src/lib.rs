@@ -404,7 +404,14 @@ fn open_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        Command::new("cmd").args(["/c", "start", "", &url]).spawn().map_err(|e| e.to_string())?;
+        // `cmd` treats an unquoted `&` as a command separator. OAuth URLs contain
+        // multiple query parameters, so pass the URL quoted to `start` as part of
+        // the command string to preserve the complete URL (including response_type).
+        let command = format!("start \"\" \"{url}\"");
+        Command::new("cmd")
+            .args(["/c", &command])
+            .spawn()
+            .map_err(|e| e.to_string())?;
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
