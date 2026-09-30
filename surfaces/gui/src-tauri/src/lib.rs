@@ -404,14 +404,29 @@ fn open_url(url: String) -> Result<(), String> {
     }
     #[cfg(target_os = "windows")]
     {
-        // `cmd` treats an unquoted `&` as a command separator. OAuth URLs contain
-        // multiple query parameters, so pass the URL quoted to `start` as part of
-        // the command string to preserve the complete URL (including response_type).
-        let command = format!("start \"\" \"{url}\"");
-        Command::new("cmd")
-            .args(["/c", &command])
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::UI::Shell::ShellExecuteW;
+
+        // Let the Windows Shell resolve the user's default app for this URL.
+        // Calling the API directly preserves query characters such as `&` and
+        // avoids cmd.exe's non-standard argument parsing entirely.
+        let wide_url: Vec<u16> = std::ffi::OsStr::new(&url)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let result = unsafe {
+            ShellExecuteW(
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                wide_url.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                1, // SW_SHOWNORMAL
+            )
+        };
+        if result as isize <= 32 {
+            return Err(format!("Windows Shell could not open URL (code {})", result as isize));
+        }
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
